@@ -1,0 +1,8 @@
+target/
+.idea/
+*.iml
+.vscode/
+.DS_Store
+# secrets - never commit
+infra/.env
+infra/jenkins/kubeconfig

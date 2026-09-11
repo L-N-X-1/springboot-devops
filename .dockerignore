@@ -1,0 +1,6 @@
+target
+.git
+infra
+k8s
+ansible
+*.md

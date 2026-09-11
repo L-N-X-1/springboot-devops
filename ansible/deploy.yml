@@ -1,0 +1,49 @@
+# Deploys the app + monitoring stack to Kubernetes.
+# Usage: ansible-playbook -i ansible/inventory.ini ansible/deploy.yml -e image=USER/springboot-devops -e tag=12
+- name: Deploy Spring Boot app to Kubernetes
+  hosts: local
+  gather_facts: false
+  vars:
+    image: "yourdockerhubuser/springboot-devops"
+    tag: "latest"
+    k8s_dir: "{{ playbook_dir }}/../k8s"
+    rendered: "/tmp/springboot-deployment.yaml"
+
+  tasks:
+    - name: Check the cluster is reachable
+      ansible.builtin.command: kubectl cluster-info
+      changed_when: false
+
+    - name: Create namespace
+      ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/app/namespace.yaml
+      register: ns
+      changed_when: "'created' in ns.stdout or 'configured' in ns.stdout"
+
+    - name: Render deployment with image {{ image }}:{{ tag }}
+      ansible.builtin.template:
+        src: "{{ k8s_dir }}/app/deployment.yaml.j2"
+        dest: "{{ rendered }}"
+        mode: "0644"
+
+    - name: Apply app deployment and service
+      ansible.builtin.command: kubectl apply -f {{ rendered }} -f {{ k8s_dir }}/app/service.yaml
+      register: app
+      changed_when: "'created' in app.stdout or 'configured' in app.stdout"
+
+    - name: Apply monitoring stack (Prometheus + Grafana)
+      ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/monitoring/
+      register: mon
+      changed_when: "'created' in mon.stdout or 'configured' in mon.stdout"
+
+    - name: Wait for the rollout to finish
+      ansible.builtin.command: kubectl rollout status deployment/springboot-app -n devops --timeout=300s
+      changed_when: false
+
+    - name: Show running pods
+      ansible.builtin.command: kubectl get pods -n devops -o wide
+      register: pods
+      changed_when: false
+
+    - name: Pods
+      ansible.builtin.debug:
+        var: pods.stdout_lines

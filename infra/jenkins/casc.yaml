@@ -1,0 +1,68 @@
+# Jenkins Configuration as Code - applied on every Jenkins start.
+# Values like ${DOCKERHUB_USER} come from infra/.env
+jenkins:
+  systemMessage: "Spring Boot DevOps CI/CD"
+  numExecutors: 2
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "${JENKINS_ADMIN_ID:-admin}"
+          password: "${JENKINS_ADMIN_PASSWORD:-admin123}"
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+  globalNodeProperties:
+    - envVars:
+        env:
+          - key: DOCKERHUB_USER
+            value: "${DOCKERHUB_USER:-changeme}"
+          - key: SONAR_HOST_URL
+            value: "http://sonarqube:9000"
+          - key: NEXUS_URL
+            value: "http://nexus:8081"
+
+unclassified:
+  location:
+    url: "http://localhost:8080/"
+
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - usernamePassword:
+              scope: GLOBAL
+              id: dockerhub-creds
+              description: DockerHub
+              username: "${DOCKERHUB_USER:-changeme}"
+              password: "${DOCKERHUB_TOKEN:-changeme}"
+          - usernamePassword:
+              scope: GLOBAL
+              id: nexus-creds
+              description: Nexus
+              username: "${NEXUS_USER:-admin}"
+              password: "${NEXUS_PASSWORD:-changeme}"
+          - string:
+              scope: GLOBAL
+              id: sonar-token
+              description: SonarQube token
+              secret: "${SONAR_TOKEN:-changeme}"
+
+jobs:
+  - script: |
+      pipelineJob('springboot-devops') {
+        description('Build, test, analyze, publish and deploy the Spring Boot app')
+        definition {
+          cpsScm {
+            scm {
+              git {
+                remote {
+                  url('${GIT_REPO_URL}')
+                }
+                branch('*/main')
+              }
+            }
+            scriptPath('Jenkinsfile')
+          }
+        }
+      }
