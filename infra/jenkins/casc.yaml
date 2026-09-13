@@ -47,7 +47,11 @@ credentials:
               id: sonar-token
               description: SonarQube token
               secret: "${SONAR_TOKEN:-changeme}"
-
+          - usernamePassword:
+              scope: GLOBAL
+              id: github-creds
+              username: "${GITHUB_USER:-changeme}"
+              password: "${GITHUB_TOKEN:-changeme}"
 jobs:
   - script: |
       pipelineJob('springboot-devops') {
@@ -58,6 +62,7 @@ jobs:
               git {
                 remote {
                   url('${GIT_REPO_URL}')
+                  credentials('github-creds')
                 }
                 branch('*/main')
               }

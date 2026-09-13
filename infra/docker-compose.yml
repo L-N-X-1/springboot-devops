@@ -16,8 +16,8 @@ services:
     volumes:
       - jenkins_home:/var/jenkins_home
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./jenkins/casc.yaml:/casc/jenkins.yaml:ro
-      - ./jenkins/kubeconfig:/kube/config:ro
+      - ./jenkins/casc.yaml:/casc/jenkins.yaml:ro,z
+      - ./jenkins/kubeconfig:/kube/config:ro,z
     networks: [devops, minikube]
     depends_on: [sonarqube, nexus]
 
