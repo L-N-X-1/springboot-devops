@@ -1,6 +1,6 @@
 # Spring Boot DevOps Project
 
-A small Product REST API with a complete CI/CD pipeline.
+A small Product, Category, and Customer REST API with a complete CI/CD pipeline.
 
 ```
 git push → GitHub → Jenkins → Maven (build + test) → SonarQube (quality gate)
@@ -11,7 +11,7 @@ git push → GitHub → Jenkins → Maven (build + test) → SonarQube (quality 
 ## Project layout
 
 ```
-├── src/                     Spring Boot app (Product CRUD + Actuator metrics)
+├── src/                     Spring Boot app (Product, Category, Customer CRUD + seeded H2 data)
 ├── pom.xml                  Maven build, JaCoCo, SonarQube, Nexus config
 ├── Dockerfile               Multi-stage image build
 ├── Jenkinsfile              The CI/CD pipeline
@@ -176,7 +176,13 @@ Change what gets deployed in `ansible/deploy.yml` and the manifests in `k8s/`.
 | POST | `/api/products` | `{"name":"Mouse","price":25.5}` |
 | PUT | `/api/products/{id}` | `{"name":"Mouse","price":30}` |
 | DELETE | `/api/products/{id}` | – |
+| GET, POST | `/api/categories` | `{"name":"Office","description":"Work supplies"}` |
+| GET, PUT, DELETE | `/api/categories/{id}` | `{"name":"Office","description":"Updated description"}` |
+| GET, POST | `/api/customers` | `{"firstName":"Ava","lastName":"Martin","email":"ava@example.com"}` |
+| GET, PUT, DELETE | `/api/customers/{id}` | `{"firstName":"Ava","lastName":"Martin","email":"ava@example.com"}` |
 | GET | `/actuator/health`, `/actuator/prometheus` | – |
+
+The H2 database is created automatically at startup. Sample categories and customers are seeded if they are not already present. Open `http://localhost:8080/h2-console` while the app is running to inspect it (JDBC URL: `jdbc:h2:mem:productsdb`, user: `sa`, no password).
 
 ## Stop everything
 ```bash
