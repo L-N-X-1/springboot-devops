@@ -29,6 +29,12 @@ pipeline {
             }
         }
 
+        stage('Security Scan (Semgrep)') {
+            steps {
+                sh 'semgrep scan --config auto --error .'
+            }
+        }
+
         stage('Code Quality (SonarQube)') {
             steps {
                 withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
