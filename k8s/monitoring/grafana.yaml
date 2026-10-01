@@ -288,8 +288,13 @@ spec:
       labels:
         app: grafana
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 472
       containers:
         - name: grafana
+          securityContext:
+            allowPrivilegeEscalation: false
           image: grafana/grafana:13.1.5
           env:
             - name: GF_SECURITY_ADMIN_USER

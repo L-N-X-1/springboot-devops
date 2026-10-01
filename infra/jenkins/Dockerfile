@@ -1,4 +1,4 @@
-# Jenkins with Maven, Docker CLI, kubectl and Ansible preinstalled
+# Jenkins with Maven, Docker CLI, kubectl, Ansible and Semgrep preinstalled
 FROM jenkins/jenkins:lts-jdk21
 
 USER root
@@ -6,7 +6,13 @@ ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         maven ansible curl ca-certificates gnupg \
+        python3 python3-venv python3-pip \
     && rm -rf /var/lib/apt/lists/*
+
+# Semgrep (in its own venv, since Debian blocks system-wide pip installs)
+RUN python3 -m venv /opt/semgrep \
+    && /opt/semgrep/bin/pip install --no-cache-dir semgrep \
+    && ln -s /opt/semgrep/bin/semgrep /usr/local/bin/semgrep
 
 # Docker CLI (talks to the host Docker daemon through the mounted socket)
 RUN install -m 0755 -d /etc/apt/keyrings \

@@ -77,9 +77,14 @@ spec:
       labels:
         app: prometheus
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
       serviceAccountName: prometheus
       containers:
         - name: prometheus
+          securityContext:
+            allowPrivilegeEscalation: false
           image: prom/prometheus:v3.13.3
           args:
             - --config.file=/etc/prometheus/prometheus.yml
