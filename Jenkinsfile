@@ -159,7 +159,18 @@ pipeline {
 
         stage('Deploy to Kubernetes (Ansible)') {
             steps {
-                sh 'ansible-playbook -i ansible/inventory.ini ansible/deploy.yml -e image=$IMAGE -e tag=$IMAGE_TAG'
+                withCredentials([string(credentialsId: 'ansible-vault-pass', variable: 'VAULT_PASS')]) {
+                    sh '''
+                        set +x
+                        umask 077
+                        VAULT_FILE=$(mktemp)
+                        trap 'rm -f "$VAULT_FILE"' EXIT
+                        printf '%s' "$VAULT_PASS" > "$VAULT_FILE"
+                        ansible-playbook -i ansible/inventory.ini ansible/deploy.yml \
+                          --vault-password-file "$VAULT_FILE" \
+                          -e image=$IMAGE -e tag=$IMAGE_TAG
+                    '''
+                }
             }
         }
     }

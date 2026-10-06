@@ -47,6 +47,11 @@ credentials:
               id: sonar-token
               description: SonarQube token
               secret: "${SONAR_TOKEN:-changeme}"
+          - string:
+              scope: GLOBAL
+              id: ansible-vault-pass
+              description: Ansible Vault password
+              secret: "${ANSIBLE_VAULT_PASS:-changeme}"
           - usernamePassword:
               scope: GLOBAL
               id: github-creds

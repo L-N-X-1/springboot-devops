@@ -6,3 +6,4 @@ target/
 # secrets - never commit
 infra/.env
 infra/jenkins/kubeconfig
+.vault_pass

@@ -6,7 +6,7 @@ ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         maven ansible curl ca-certificates gnupg \
-        python3 python3-venv python3-pip \
+        python3 python3-venv python3-pip python3-kubernetes \
     && rm -rf /var/lib/apt/lists/*
 
 # Semgrep (in its own venv, since Debian blocks system-wide pip installs)

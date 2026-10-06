@@ -30,6 +30,25 @@
       register: app
       changed_when: "'created' in app.stdout or 'configured' in app.stdout"
 
+    - name: Create monitoring namespace
+      ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/monitoring/00-namespace.yaml
+      register: monns
+      changed_when: "'created' in monns.stdout or 'configured' in monns.stdout"
+
+    - name: Create Grafana admin secret
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: grafana-admin
+            namespace: monitoring
+          type: Opaque
+          stringData:
+            admin-password: "{{ vault_grafana_admin_password }}"
+      no_log: true
+
     - name: Apply monitoring stack (Prometheus + Grafana)
       ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/monitoring/
       register: mon
@@ -47,3 +66,4 @@
     - name: Pods
       ansible.builtin.debug:
         var: pods.stdout_lines
+
