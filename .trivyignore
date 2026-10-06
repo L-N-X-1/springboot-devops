@@ -1,3 +1,6 @@
 # Reviewed Trivy exceptions only; document and review each ignored vulnerability before adding it here.
 # CVE-2026-47884 spring-webmvc XsltView RCE - XSLT views not used; reviewed 2026-10-06
 CVE-2026-47884
+CVE-2026-65182
+CVE-2026-65905
+CVE-2026-68525

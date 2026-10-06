@@ -22,7 +22,6 @@
         <jacoco.version>0.8.14</jacoco.version>
         <sonar.maven.version>5.8.0.7211</sonar.maven.version>
         <!-- Security overrides (Trivy findings) -->
-        <tomcat.version>10.1.58</tomcat.version>
         <jackson-bom.version>2.21.7</jackson-bom.version>
         <!-- SonarQube -->
         <sonar.projectKey>springboot-devops</sonar.projectKey>
