@@ -10,31 +10,31 @@ flowchart LR
     G -->|push or webhook| M
 
     subgraph HOST[Host Docker]
-        subgraph JK[Jenkins]
-            M[Maven<br/>Build, test & coverage] --> S[Semgrep<br/>Static security scan]
-            S --> TF[Trivy FS<br/>Dependency scan]
-            TF --> Q[Maven / SonarQube<br/>Code-quality gate]
-            Q --> N[Maven / Nexus<br/>Publish JAR]
-            N --> D[Docker<br/>Multi-stage image build]
-            D --> TI[Trivy Image<br/>Container image scan]
-            TI --> H[Docker Hub<br/>Push versioned & latest image]
-            H --> TC[Trivy Config<br/>IaC/config scan]
-            TC --> A[Ansible<br/>Deploy application & monitoring]
-        end
-        SQ[SonarQube]
-        NX[Nexus]
-        Q --> SQ
-        N --> NX
+      subgraph JK[Jenkins]
+        M[Maven<br/>Build, test & coverage] --> S[Semgrep<br/>Static security scan]
+        S --> TF[Trivy FS<br/>Dependency scan]
+        TF --> Q[Maven / SonarQube<br/>Code-quality gate]
+        Q --> N[Maven / Nexus<br/>Publish JAR]
+        N --> D[Docker<br/>Multi-stage image build]
+        D --> TI[Trivy Image<br/>Container image scan]
+        TI --> H[Docker Hub<br/>Push versioned & latest image]
+        H --> TC[Trivy Config<br/>IaC/config scan]
+        TC --> A[Ansible<br/>Deploy application & monitoring]
+      end
+      SQ[SonarQube]
+      NX[Nexus]
+      Q --> SQ
+      N --> NX
 
-        subgraph MK[Minikube]
-            K[Kubernetes<br/>Spring Boot application]
-            P[Prometheus]
-            GR[Grafana]
-            K -->|/actuator/prometheus| P --> GR
-        end
-        A --> K
-        A --> P
-        A --> GR
+      subgraph MK[Minikube]
+        K[Kubernetes<br/>Spring Boot application]
+        P[Prometheus]
+        GR[Grafana]
+        K -->|/actuator/prometheus| P --> GR
+      end
+      A --> K
+      A --> P
+      A --> GR
     end
 ```
 
@@ -116,6 +116,88 @@ Trivy vulnerability exceptions live in [`.trivyignore`](.trivyignore). Every ent
 ├── infra/                   Docker Compose, Jenkins image, JCasC, setup helpers
 ├── ansible/                 Kubernetes deployment playbook
 └── k8s/                     Application and monitoring manifests
+```
+
+## Project tree
+
+```text
+springboot-devops/
+├── .dockerignore
+├── .gitignore
+├── .pre-commit-config.yaml
+├── .semgrepignore
+├── .trivyignore
+├── Dockerfile
+├── Jenkinsfile
+├── README.md
+├── functionality.md
+├── pom.xml
+├── ansible/
+│   ├── deploy.yml
+│   └── inventory.ini
+├── ci/
+│   └── maven-settings.xml
+├── infra/
+│   ├── .env.example
+│   ├── docker-compose.yml
+│   ├── export-kubeconfig.sh
+│   └── jenkins/
+│       ├── Dockerfile
+│       └── casc.yaml
+├── k8s/
+│   ├── app/
+│   │   ├── deployment.yaml.j2
+│   │   ├── namespace.yaml
+│   │   └── service.yaml
+│   └── monitoring/
+│       ├── 00-namespace.yaml
+│       ├── grafana.yaml
+│       └── prometheus.yaml
+├── scripts/
+│   └── check-sensitive-filenames.sh
+├── src/
+│   ├── main/
+│   │   ├── java/
+│   │   │   └── com/
+│   │   │       └── example/
+│   │   │           └── demo/
+│   │   │               ├── DemoApplication.java
+│   │   │               ├── HomeController.java
+│   │   │               ├── SampleDataInitializer.java
+│   │   │               ├── controller/
+│   │   │               │   ├── CategoryController.java
+│   │   │               │   ├── CustomerController.java
+│   │   │               │   └── ProductController.java
+│   │   │               ├── dto/
+│   │   │               │   ├── ProductRequest.java
+│   │   │               │   └── ProductResponse.java
+│   │   │               ├── entity/
+│   │   │               │   ├── Category.java
+│   │   │               │   ├── Customer.java
+│   │   │               │   └── Product.java
+│   │   │               ├── exception/
+│   │   │               │   ├── GlobalExceptionHandler.java
+│   │   │               │   └── ResourceNotFoundException.java
+│   │   │               ├── repository/
+│   │   │               │   ├── CategoryRepository.java
+│   │   │               │   ├── CustomerRepository.java
+│   │   │               │   └── ProductRepository.java
+│   │   │               └── service/
+│   │   │                   ├── CategoryService.java
+│   │   │                   ├── CustomerService.java
+│   │   │                   ├── ProductService.java
+│   │   │                   └── impl/
+│   │   │                       ├── CategoryServiceImpl.java
+│   │   │                       ├── CustomerServiceImpl.java
+│   │   │                       └── ProductServiceImpl.java
+│   │   └── resources/
+│   │       └── application.properties
+│   └── test/
+│       └── java/
+│           └── com/
+│               └── example/
+│                   └── demo/
+│                       └── ProductControllerTest.java
 ```
 
 ## Prerequisites
