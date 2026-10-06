@@ -10,31 +10,31 @@ flowchart LR
     G -->|push or webhook| M
 
     subgraph HOST[Host Docker]
-      subgraph JK[Jenkins]
-        M[Maven<br/>Build, test & coverage] --> S[Semgrep<br/>Static security scan]
-        S --> TF[Trivy FS<br/>Dependency scan]
-        TF --> Q[Maven / SonarQube<br/>Code-quality gate]
-        Q --> N[Maven / Nexus<br/>Publish JAR]
-        N --> D[Docker<br/>Multi-stage image build]
-        D --> TI[Trivy Image<br/>Container image scan]
-        TI --> H[Docker Hub<br/>Push versioned & latest image]
-        H --> TC[Trivy Config<br/>IaC/config scan]
-        TC --> A[Ansible<br/>Deploy application & monitoring]
-      end
-      SQ[SonarQube]
-      NX[Nexus]
-      Q --> SQ
-      N --> NX
+        subgraph JK[Jenkins]
+            M[Maven<br/>Build, test & coverage] --> S[Semgrep<br/>Static security scan]
+            S --> TF[Trivy FS<br/>Dependency scan]
+            TF --> Q[Maven / SonarQube<br/>Code-quality gate]
+            Q --> N[Maven / Nexus<br/>Publish JAR]
+            N --> D[Docker<br/>Multi-stage image build]
+            D --> TI[Trivy Image<br/>Container image scan]
+            TI --> H[Docker Hub<br/>Push versioned & latest image]
+            H --> TC[Trivy Config<br/>IaC/config scan]
+            TC --> A[Ansible<br/>Deploy application & monitoring]
+        end
+        SQ[SonarQube]
+        NX[Nexus]
+        Q --> SQ
+        N --> NX
 
-      subgraph MK[Minikube]
-        K[Kubernetes<br/>Spring Boot application]
-        P[Prometheus]
-        GR[Grafana]
-        K -->|/actuator/prometheus| P --> GR
-      end
-      A --> K
-      A --> P
-      A --> GR
+        subgraph MK[Minikube]
+            K[Kubernetes<br/>Spring Boot application]
+            P[Prometheus]
+            GR[Grafana]
+            K -->|/actuator/prometheus| P --> GR
+        end
+        A --> K
+        A --> P
+        A --> GR
     end
 ```
 
@@ -53,7 +53,7 @@ The Jenkins container, SonarQube, Nexus, and Minikube run locally. Jenkins conne
 | Artifact management | Nexus Repository | Maven publishes the versioned JAR to the snapshots or releases repository. |
 | Containerize and release | Docker + Docker Hub | A multi-stage Dockerfile produces a non-root Java 17 runtime image. Jenkins pushes the build-number tag and `latest`. |
 | Container image security | Trivy Image | Scans the built image for HIGH and CRITICAL vulnerabilities before it can be pushed; HTML and JSON reports are retained in Jenkins. |
-| IaC/config security | Trivy Config | Reports HIGH and CRITICAL configuration findings in `k8s/` and `ansible/`; HTML and JSON reports are retained in Jenkins. |
+| IaC/config security | Trivy Config | Reports HIGH and CRITICAL misconfigurations in the repository (Kubernetes manifests, Ansible, Dockerfile); HTML and JSON reports are retained in Jenkins. |
 | Deploy | Ansible + Kubernetes / Minikube | Ansible renders the image tag, applies the app manifests, deploys monitoring, and waits for the rollout. |
 | Operate and monitor | Spring Boot Actuator + Prometheus + Grafana | Prometheus scrapes application metrics; Grafana provides the application dashboard. |
 
@@ -81,7 +81,7 @@ The pipeline is defined in [`Jenkinsfile`](Jenkinsfile) and runs in this order:
 6. Build the Docker image using a multi-stage Dockerfile.
 7. Scan the image with Trivy; HIGH and CRITICAL findings stop the image from being pushed.
 8. Push `<dockerhub-user>/springboot-devops:<jenkins-build-number>` and `:latest` to Docker Hub.
-9. Run the report-only Trivy configuration scan for `k8s/` and `ansible/`.
+9. Run the report-only Trivy configuration scan (repository root, excluding `target/` and `infra/`).
 10. Run Ansible to deploy that exact image tag to Minikube, then apply Prometheus and Grafana.
 
 Any failed stage stops the later stages, so an image is not built, published, or deployed after a failed test, Semgrep scan, Trivy image scan, or SonarQube gate.
@@ -89,6 +89,18 @@ Any failed stage stops the later stages, so an image is not built, published, or
 ## Security reports
 
 Each Jenkins build retains Trivy HTML and JSON reports under **Build → Artifacts**. The Jenkins build page also provides **Trivy FS Scan**, **Trivy Image Scan**, and **Trivy Config Scan** links from the HTML Publisher plugin for viewing the HTML reports in the UI.
+
+Reports are generated in the Jenkins workspace, not in your local project folder. To copy them locally:
+
+```bash
+docker cp jenkins:/var/jenkins_home/workspace/springboot-devops/reports ./reports
+```
+
+`reports/` is not committed to Git (it is listed in `.gitignore`).
+
+### Exceptions policy
+
+Trivy vulnerability exceptions live in [`.trivyignore`](.trivyignore). Every entry must include a comment with the reason and a review date. Prefer fixing the dependency or base image over ignoring a finding.
 
 ## Repository layout
 
@@ -272,7 +284,9 @@ Use `docker compose down -v` only when intentionally deleting Jenkins, SonarQube
 | `network minikube not found` | Start Minikube before starting Docker Compose. |
 | Nexus returns `401` | Correct `NEXUS_PASSWORD` in `infra/.env`, then recreate Jenkins configuration. |
 | SonarQube or Semgrep stage fails | Review the Jenkins console output; address the finding or quality-gate condition before retrying. |
-| Trivy stage fails | Check the Trivy report, update the base image or dependency, or add a reviewed exception to `.trivyignore`. |
+| Trivy stage fails | Check the Trivy report, update the base image or dependency, or add a reviewed exception (with reason and review date) to `.trivyignore`. |
+| Trivy fixed version not found on Maven Central | Trivy's database can list fixes that are not yet published. Check Maven Central for the version before overriding it in `pom.xml`. |
 | Trivy DB download fails or is slow | Confirm the persistent Trivy cache volume is present and Jenkins has network access to download the database. |
+| Trivy reports not found locally | Reports live in the Jenkins workspace. Use **Build → Artifacts** or `docker cp` (see Security reports). |
 | `ImagePullBackOff` | Ensure the Docker Hub repository is public and `DOCKERHUB_USER` is correct. |
 | SonarQube does not start on Linux | Run `sudo sysctl -w vm.max_map_count=524288`. |
