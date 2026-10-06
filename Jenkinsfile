@@ -166,6 +166,7 @@ pipeline {
                         VAULT_FILE=$(mktemp)
                         trap 'rm -f "$VAULT_FILE"' EXIT
                         printf '%s' "$VAULT_PASS" > "$VAULT_FILE"
+                        echo "len=$(printf '%s' "$VAULT_PASS" | wc -c)"
                         ansible-playbook -i ansible/inventory.ini ansible/deploy.yml \
                           --vault-password-file "$VAULT_FILE" \
                           -e image=$IMAGE -e tag=$IMAGE_TAG
