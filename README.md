@@ -1,37 +1,113 @@
-# Spring Boot DevOps Project
+# Spring Boot DevSecOps Pipeline
 
-A small Product, Category, and Customer REST API with a complete CI/CD pipeline.
+A Product, Category, and Customer REST API delivered through a local, end-to-end DevSecOps pipeline. A developer commit is checked before it leaves the workstation; Jenkins then builds, tests, scans, analyzes, publishes, packages, deploys, and monitors the application.
 
+## Architecture
+
+```mermaid
+flowchart LR
+    C[Developer commit] -->|pre-commit hooks| G[Git / GitHub]
+    G -->|push or webhook| M
+
+    subgraph HOST[Host Docker]
+      subgraph JK[Jenkins]
+        M[Maven<br/>Build, test & coverage] --> S[Semgrep<br/>Static security scan]
+        S --> Q[Maven / SonarQube<br/>Code-quality gate]
+        Q --> N[Maven / Nexus<br/>Publish JAR]
+        N --> D[Docker<br/>Multi-stage image build]
+        D --> H[Docker Hub<br/>Push versioned & latest image]
+        H --> A[Ansible<br/>Deploy application & monitoring]
+      end
+      SQ[SonarQube]
+      NX[Nexus]
+      Q --> SQ
+      N --> NX
+
+      subgraph MK[Minikube]
+        K[Kubernetes<br/>Spring Boot application]
+        P[Prometheus]
+        GR[Grafana]
+        K -->|/actuator/prometheus| P --> GR
+      end
+      A --> K
+      A --> P
+      A --> GR
+    end
 ```
-git push → GitHub → Jenkins → Maven (build + test) → SonarQube (quality gate)
-        → Nexus (JAR) → Docker build → DockerHub → Ansible → Kubernetes (Minikube)
-        → Prometheus scrapes metrics → Grafana dashboard
+
+The Jenkins container, SonarQube, Nexus, and Minikube run locally. Jenkins connects to the host Docker socket to build and push images, and uses the exported kubeconfig to deploy to Minikube.
+
+## DevSecOps phases and controls
+
+| Phase | Implementation | What it provides |
+|---|---|---|
+| Plan / develop | Git and GitHub | Versioned source code and a push-triggered delivery workflow. |
+| Commit security | `pre-commit` | Checks YAML, trailing whitespace, oversized additions, exposed private keys, Gitleaks secrets, and sensitive filenames before a commit is created. |
+| Build and test | Maven + JUnit + JaCoCo | `mvn clean verify` compiles the Java 17 application, runs tests, and generates coverage data. |
+| Static application security testing (SAST) | Semgrep | `semgrep scan --config auto --error .` runs in Jenkins and stops the pipeline on findings. |
+| Code quality | SonarQube | Maven submits analysis and coverage; Jenkins waits for the configured quality gate and fails if it does not pass. |
+| Artifact management | Nexus Repository | Maven publishes the versioned JAR to the snapshots or releases repository. |
+| Containerize and release | Docker + Docker Hub | A multi-stage Dockerfile produces a non-root Java 17 runtime image. Jenkins pushes the build-number tag and `latest`. |
+| Deploy | Ansible + Kubernetes / Minikube | Ansible renders the image tag, applies the app manifests, deploys monitoring, and waits for the rollout. |
+| Operate and monitor | Spring Boot Actuator + Prometheus + Grafana | Prometheus scrapes application metrics; Grafana provides the application dashboard. |
+
+### Local commit checks
+
+Install the hooks once after cloning:
+
+```bash
+python3 -m pip install pre-commit
+pre-commit install
+pre-commit run --all-files
 ```
 
-## Project layout
+The hook configuration is in [`.pre-commit-config.yaml`](.pre-commit-config.yaml). Hooks prevent unsafe commits but are not a substitute for CI: Semgrep and SonarQube run again in Jenkins after code is pushed. If an intentional exception is required, fix or formally review the finding instead of routinely bypassing a hook with `--no-verify`.
 
-```
-├── src/                     Spring Boot app (Product, Category, Customer CRUD + seeded H2 data)
-├── pom.xml                  Maven build, JaCoCo, SonarQube, Nexus config
-├── Dockerfile               Multi-stage image build
-├── Jenkinsfile              The CI/CD pipeline
-├── ci/maven-settings.xml    Nexus credentials (injected by Jenkins)
-├── ansible/                 Playbook that deploys to Kubernetes
-├── k8s/app/                 App Deployment + Service
-├── k8s/monitoring/          Prometheus + Grafana (with a ready dashboard)
-└── infra/                   Docker Compose for Jenkins, SonarQube, Nexus
+## Pipeline sequence
+
+The pipeline is defined in [`Jenkinsfile`](Jenkinsfile) and runs in this order:
+
+1. Build, test, and collect coverage with Maven.
+2. Scan the repository with Semgrep.
+3. Submit quality and coverage analysis to SonarQube; wait for its quality gate.
+4. Publish the Maven artifact to Nexus.
+5. Build the Docker image using a multi-stage Dockerfile.
+6. Push `<dockerhub-user>/springboot-devops:<jenkins-build-number>` and `:latest` to Docker Hub.
+7. Run Ansible to deploy that exact image tag to Minikube, then apply Prometheus and Grafana.
+
+Any failed stage stops the later stages, so an image is not built, published, or deployed after a failed test, Semgrep scan, or SonarQube gate.
+
+## Repository layout
+
+```text
+├── src/                     Spring Boot CRUD API, tests, Actuator metrics
+├── pom.xml                  Maven, JaCoCo, SonarQube, and Nexus settings
+├── Dockerfile               Multi-stage, non-root runtime image
+├── Jenkinsfile              CI/CD and security pipeline
+├── .pre-commit-config.yaml  Developer-side quality and secret checks
+├── scripts/                 Custom sensitive-file-name hook
+├── ci/                      Maven settings used for Nexus publishing
+├── infra/                   Docker Compose, Jenkins image, JCasC, setup helpers
+├── ansible/                 Kubernetes deployment playbook
+└── k8s/                     Application and monitoring manifests
 ```
 
 ## Prerequisites
 
-Docker (Desktop), Minikube, Git, a GitHub account, a DockerHub account, and ~10 GB free RAM.
-On Windows, run the commands in **Git Bash** or **WSL**.
+- Docker and Docker Compose
+- Minikube with the Docker driver, `kubectl`, and Git
+- A GitHub repository and Docker Hub repository/account
+- Python 3 for local pre-commit hooks
+- Approximately 10 GB RAM available for Minikube, Jenkins, SonarQube, and Nexus
 
----
+On Windows, use Git Bash or WSL for the shell commands.
 
-## Setup (one time)
+## One-time setup
 
-**1. Push the code to GitHub** (create an empty **public** repo named `springboot-devops` first)
+### 1. Push the project to GitHub
+
+Create an empty public repository named `springboot-devops`, then configure the remote:
+
 ```bash
 git init
 git add .
@@ -41,163 +117,146 @@ git remote add origin https://github.com/YOUR_USER/springboot-devops.git
 git push -u origin main
 ```
 
-**2. Start Kubernetes** (must be started before Jenkins)
+### 2. Enable local commit protections
+
+```bash
+python3 -m pip install pre-commit
+pre-commit install
+```
+
+### 3. Start Minikube and export access for Jenkins
+
+Minikube must be running before Jenkins, because Jenkins joins its Docker network.
+
 ```bash
 minikube start --driver=docker --cpus=2 --memory=4096
-./infra/export-kubeconfig.sh      # lets Jenkins talk to Minikube
+./infra/export-kubeconfig.sh
 ```
 
-**3. Create your config**
+### 4. Configure local credentials
+
 ```bash
 cd infra
-cp .env.example .env              # fill GIT_REPO_URL, DOCKERHUB_USER, DOCKERHUB_TOKEN
+cp .env.example .env
 ```
-DockerHub token: hub.docker.com → Account settings → Personal access tokens (Read & Write).
 
-**4. Start SonarQube and Nexus** (wait ~2 min for them to boot)
+Set `GIT_REPO_URL`, `DOCKERHUB_USER`, `DOCKERHUB_TOKEN`, `SONAR_TOKEN`, and `NEXUS_PASSWORD` in `infra/.env`. Do not commit this file.
+
+### 5. Start SonarQube and Nexus
+
 ```bash
 docker compose up -d sonarqube nexus
 ```
-- **SonarQube** → http://localhost:9000, login `admin/admin`, set a new password.
-  Then *My Account → Security → Generate Token* (type: Global Analysis) → put it in `SONAR_TOKEN`.
-- **Nexus** → get the first password: `docker exec nexus cat /nexus-data/admin.password`
-  Log in at http://localhost:8081 as `admin`, set a new password → put it in `NEXUS_PASSWORD`.
 
-**5. Start Jenkins**
+Wait for both services to start. Then:
+
+- SonarQube: open <http://localhost:9000>, sign in with `admin/admin`, change the password, and create a token under **My Account → Security**.
+- Nexus: retrieve its initial password with `docker exec nexus cat /nexus-data/admin.password`, then open <http://localhost:8081>, sign in as `admin`, and set a new password.
+
+Add the generated values to `infra/.env`.
+
+### 6. Start Jenkins and run the delivery pipeline
+
 ```bash
 docker compose up -d --build jenkins
 ```
-Open http://localhost:8080 (login from `.env`, default `admin/admin123`).
-The job **springboot-devops** and all credentials are created automatically.
-Click **Build Now** once. After that, every `git push` triggers a build (checked every 2 min).
 
-**6. Open the app and monitoring**
+Open <http://localhost:8080> and sign in using the Jenkins credentials in `infra/.env` (the example defaults are `admin` / `admin123`). The `springboot-devops` job and its credentials are created through Jenkins Configuration as Code. Run **Build Now** once; subsequent pushes are detected by a GitHub webhook when configured, or by polling approximately every two minutes.
+
+For immediate GitHub-triggered builds outside a publicly reachable network, expose Jenkins (for example, with `ngrok http 8080`) and add `https://<public-url>/github-webhook/` as a GitHub webhook.
+
+## Working locally
+
 ```bash
-minikube service springboot-app -n devops --url    # the API
-minikube service prometheus -n monitoring --url    # Prometheus
-minikube service grafana -n monitoring --url       # Grafana (admin/admin)
-```
-
----
-
-## How to use / manage each tool
-
-### Git & GitHub
-```bash
-git checkout -b feature/x        # new branch
-git add . && git commit -m "msg"
-git push                         # on main → Jenkins builds & deploys
-```
-Optional instant builds: expose Jenkins with `ngrok http 8080`, then in GitHub repo
-*Settings → Webhooks* add `https://<ngrok-url>/github-webhook/` (content type `application/json`).
-
-### Maven
-```bash
-mvn spring-boot:run              # run locally → http://localhost:8080
-mvn test                         # unit tests
-mvn clean verify                 # build + tests + coverage (target/site/jacoco/index.html)
-mvn package                      # JAR → target/app.jar
-```
-
-### Jenkins — http://localhost:8080
-- **Run a build:** job → *Build Now*. **Logs:** build number → *Console Output*.
-- **Change pipeline:** edit `Jenkinsfile`, commit, push.
-- **Change credentials:** edit `infra/.env` then `docker compose up -d jenkins` (config is reapplied on start).
-- **Add plugins:** add to `infra/jenkins/Dockerfile`, then `docker compose up -d --build jenkins`.
-- Logs: `docker logs -f jenkins`
-
-### SonarQube — http://localhost:9000
-- *Projects → springboot-devops*: bugs, code smells, coverage, duplications.
-- *Quality Gates*: the rules a build must pass. If the gate fails, the Jenkins build fails.
-- To relax rules: create your own gate, then set it on the project (*Project Settings → Quality Gate*).
-
-### Nexus — http://localhost:8081
-- *Browse → maven-snapshots → com/example/springboot-devops*: every build's JAR.
-- Current version is `1.0.0-SNAPSHOT`. For a release, change `<version>` in `pom.xml` to `1.0.0` (goes to `maven-releases`, which can't be overwritten).
-
-### Docker
-```bash
+mvn spring-boot:run             # application: http://localhost:8080
+mvn clean verify                # build, tests, and JaCoCo coverage
 docker build -t springboot-devops .
-docker run -p 8080:8080 springboot-devops
-docker images        # list images
-docker ps            # running containers
+docker run --rm -p 8080:8080 springboot-devops
 ```
 
-### DockerHub — hub.docker.com
-Jenkins pushes `YOUR_USER/springboot-devops:<build-number>` and `:latest`.
-Keep the repo **public** so Minikube can pull it. Any tag can be pulled with `docker pull YOUR_USER/springboot-devops:12`.
+To run the pre-commit suite without creating a commit:
 
-### Kubernetes (Minikube)
 ```bash
-kubectl get all -n devops                                   # everything for the app
-kubectl logs -f deploy/springboot-app -n devops             # app logs
-kubectl describe pod <pod> -n devops                        # debug a pod
-kubectl scale deploy/springboot-app --replicas=3 -n devops  # scale
-kubectl rollout history deploy/springboot-app -n devops     # deploy history
-kubectl rollout undo deploy/springboot-app -n devops        # rollback
-minikube dashboard                                          # web UI
-minikube stop / minikube start                              # stop / resume cluster
+pre-commit run --all-files
 ```
 
-### Ansible
-Jenkins runs it for you. To deploy a specific version by hand (from the project root):
+## Using the deployed stack
+
+```bash
+minikube service springboot-app -n devops --url
+minikube service prometheus -n monitoring --url
+minikube service grafana -n monitoring --url
+```
+
+- Jenkins: <http://localhost:8080>
+- SonarQube: <http://localhost:9000>
+- Nexus: <http://localhost:8081>
+- Grafana credentials: `admin` / `admin`
+
+Useful checks:
+
+```bash
+kubectl get all -n devops
+kubectl logs -f deploy/springboot-app -n devops
+kubectl rollout status deployment/springboot-app -n devops
+kubectl rollout undo deployment/springboot-app -n devops
+```
+
+To deploy an existing Docker Hub tag manually:
+
 ```bash
 ansible-playbook -i ansible/inventory.ini ansible/deploy.yml \
   -e image=YOUR_USER/springboot-devops -e tag=12
 ```
-Change what gets deployed in `ansible/deploy.yml` and the manifests in `k8s/`.
-
-### Prometheus
-- *Status → Targets*: both app pods should be **UP**.
-- Try queries in *Graph*:
-  - `http_server_requests_seconds_count`
-  - `jvm_memory_used_bytes{area="heap"}`
-  - `rate(http_server_requests_seconds_count[1m])`
-- Config: `k8s/monitoring/prometheus.yaml`. Any pod with the `prometheus.io/scrape: "true"` annotation is scraped automatically.
-
-### Grafana
-- Login `admin/admin` → *Dashboards → Spring Boot App* (pods, req/s, latency, heap, CPU).
-- More JVM detail: *Dashboards → New → Import* → ID `4701` → choose the Prometheus datasource.
-- Generate some traffic to see graphs move:
-  ```bash
-  URL=$(minikube service springboot-app -n devops --url)
-  for i in $(seq 200); do curl -s $URL/api/products > /dev/null; done
-  ```
-
----
 
 ## API
 
-| Method | URL | Body |
+| Method | Endpoint | Example request body |
 |---|---|---|
-| GET | `/` | – |
-| GET | `/api/products` | – |
-| GET | `/api/products/{id}` | – |
-| POST | `/api/products` | `{"name":"Mouse","price":25.5}` |
-| PUT | `/api/products/{id}` | `{"name":"Mouse","price":30}` |
-| DELETE | `/api/products/{id}` | – |
+| GET | `/` | — |
+| GET, POST | `/api/products` | `{"name":"Mouse","price":25.5}` |
+| GET, PUT, DELETE | `/api/products/{id}` | `{"name":"Mouse","price":30}` |
 | GET, POST | `/api/categories` | `{"name":"Office","description":"Work supplies"}` |
 | GET, PUT, DELETE | `/api/categories/{id}` | `{"name":"Office","description":"Updated description"}` |
 | GET, POST | `/api/customers` | `{"firstName":"Ava","lastName":"Martin","email":"ava@example.com"}` |
 | GET, PUT, DELETE | `/api/customers/{id}` | `{"firstName":"Ava","lastName":"Martin","email":"ava@example.com"}` |
-| GET | `/actuator/health`, `/actuator/prometheus` | – |
+| GET | `/actuator/health`, `/actuator/prometheus` | — |
 
-The H2 database is created automatically at startup. Sample categories and customers are seeded if they are not already present. Open `http://localhost:8080/h2-console` while the app is running to inspect it (JDBC URL: `jdbc:h2:mem:productsdb`, user: `sa`, no password).
+The H2 database is created in memory at startup. When running locally, inspect it at <http://localhost:8080/h2-console> using `jdbc:h2:mem:productsdb`, user `sa`, and no password.
 
-## Stop everything
+## Monitoring
+
+Prometheus automatically scrapes pods annotated with `prometheus.io/scrape: "true"`. In Prometheus, try:
+
+```text
+http_server_requests_seconds_count
+jvm_memory_used_bytes{area="heap"}
+rate(http_server_requests_seconds_count[1m])
+```
+
+Grafana includes a Spring Boot application dashboard. Generate traffic to populate it:
+
 ```bash
-cd infra && docker compose down        # add -v to also delete all data
+URL=$(minikube service springboot-app -n devops --url)
+for i in $(seq 200); do curl -s "$URL/api/products" > /dev/null; done
+```
+
+## Stop the environment
+
+```bash
+cd infra && docker compose down
 minikube stop
 ```
 
+Use `docker compose down -v` only when intentionally deleting Jenkins, SonarQube, and Nexus data. Use `minikube delete` only when intentionally deleting the entire cluster.
+
 ## Troubleshooting
 
-| Problem | Fix |
+| Issue | Resolution |
 |---|---|
-| Deploy stage can't reach cluster | Minikube IP changed: `./infra/export-kubeconfig.sh` then `docker compose restart jenkins` |
-| `network minikube not found` | Start Minikube before `docker compose up` |
-| `kubeconfig` is a folder | You started Jenkins before step 2: `rm -rf infra/jenkins/kubeconfig`, rerun the script, restart Jenkins |
-| Nexus `401` | Wrong `NEXUS_PASSWORD` in `.env` → fix, then `docker compose up -d jenkins` |
-| SonarQube stage fails | Open the project in SonarQube to see which quality gate condition failed |
-| `ImagePullBackOff` | DockerHub repo must be public and `DOCKERHUB_USER` correct |
-| SonarQube won't start (Linux) | `sudo sysctl -w vm.max_map_count=524288` |
+| Jenkins cannot reach Kubernetes | Run `./infra/export-kubeconfig.sh`, then restart Jenkins. |
+| `network minikube not found` | Start Minikube before starting Docker Compose. |
+| Nexus returns `401` | Correct `NEXUS_PASSWORD` in `infra/.env`, then recreate Jenkins configuration. |
+| SonarQube or Semgrep stage fails | Review the Jenkins console output; address the finding or quality-gate condition before retrying. |
+| `ImagePullBackOff` | Ensure the Docker Hub repository is public and `DOCKERHUB_USER` is correct. |
+| SonarQube does not start on Linux | Run `sudo sysctl -w vm.max_map_count=524288`. |
