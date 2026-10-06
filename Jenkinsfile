@@ -37,16 +37,14 @@ pipeline {
 
         stage('Trivy FS Scan') {
             steps {
-                    sh '''
-                        mkdir -p reports
-                        trivy image --timeout 15m --severity HIGH,CRITICAL --ignore-unfixed --ignorefile .trivyignore \
-                          --format template --template "@/usr/local/share/trivy/html.tpl" --output reports/trivy-image.html $IMAGE:$IMAGE_TAG
-                        trivy image --timeout 15m --severity HIGH,CRITICAL --ignore-unfixed --ignorefile .trivyignore \
-                          --format json --output reports/trivy-image.json $IMAGE:$IMAGE_TAG
-                        trivy image --timeout 15m --severity HIGH,CRITICAL --ignore-unfixed --ignorefile .trivyignore \
-                          --exit-code 1 $IMAGE:$IMAGE_TAG
-                    '''
-                }
+                sh '''
+                    mkdir -p reports
+                    trivy fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --ignorefile .trivyignore \
+                      --format template --template "@/usr/local/share/trivy/html.tpl" --output reports/trivy-fs.html .
+                    trivy fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --ignorefile .trivyignore \
+                      --format json --output reports/trivy-fs.json .
+                '''
+            }
             post {
                 always {
                     archiveArtifacts artifacts: 'reports/trivy-fs.html,reports/trivy-fs.json', allowEmptyArchive: true
@@ -95,11 +93,11 @@ pipeline {
             steps {
                 sh '''
                     mkdir -p reports
-                    trivy image --severity HIGH,CRITICAL --ignore-unfixed --ignorefile .trivyignore \
+                    trivy image --timeout 15m --severity HIGH,CRITICAL --ignore-unfixed --ignorefile .trivyignore \
                       --format template --template "@/usr/local/share/trivy/html.tpl" --output reports/trivy-image.html $IMAGE:$IMAGE_TAG
-                    trivy image --severity HIGH,CRITICAL --ignore-unfixed --ignorefile .trivyignore \
+                    trivy image --timeout 15m --severity HIGH,CRITICAL --ignore-unfixed --ignorefile .trivyignore \
                       --format json --output reports/trivy-image.json $IMAGE:$IMAGE_TAG
-                    trivy image --severity HIGH,CRITICAL --ignore-unfixed --ignorefile .trivyignore \
+                    trivy image --timeout 15m --severity HIGH,CRITICAL --ignore-unfixed --ignorefile .trivyignore \
                       --exit-code 1 $IMAGE:$IMAGE_TAG
                 '''
             }
