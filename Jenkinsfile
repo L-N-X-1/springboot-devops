@@ -138,7 +138,8 @@ pipeline {
                       --format template --template @/usr/local/share/trivy/html.tpl \
                       --output reports/trivy-config.html .
                     trivy config --severity HIGH,CRITICAL --ignorefile .trivyignore --exit-code 0 \
-                      --format json --output reports/trivy-config.json k8s/ ansible/
+                      --skip-dirs target --skip-dirs infra \
+                      --format json --output reports/trivy-config.json .
                 '''
             }
             post {
