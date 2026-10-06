@@ -24,7 +24,6 @@
         <!-- Security overrides (Trivy findings) -->
         <tomcat.version>10.1.58</tomcat.version>
         <jackson-bom.version>2.21.7</jackson-bom.version>
-        <spring-framework.version>6.2.20</spring-framework.version>
         <!-- SonarQube -->
         <sonar.projectKey>springboot-devops</sonar.projectKey>
         <sonar.projectName>springboot-devops</sonar.projectName>
