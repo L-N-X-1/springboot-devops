@@ -35,6 +35,31 @@ pipeline {
             }
         }
 
+        stage('Trivy FS Scan') {
+            steps {
+                sh '''
+                    mkdir -p reports
+                    trivy fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --ignorefile .trivyignore \
+                      --format template --template "@/usr/local/share/trivy/html.tpl" --output reports/trivy-fs.html .
+                    trivy fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --ignorefile .trivyignore \
+                      --format json --output reports/trivy-fs.json .
+                '''
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'reports/trivy-fs.html,reports/trivy-fs.json', allowEmptyArchive: true
+                    publishHTML(target: [
+                        allowMissing: true,
+                        alwaysLinkToLastBuild: true,
+                        keepAll: true,
+                        reportDir: 'reports',
+                        reportFiles: 'trivy-fs.html',
+                        reportName: 'Trivy FS Scan'
+                    ])
+                }
+            }
+        }
+
         stage('Code Quality (SonarQube)') {
             steps {
                 withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
@@ -64,6 +89,33 @@ pipeline {
             }
         }
 
+        stage('Trivy Image Scan') {
+            steps {
+                sh '''
+                    mkdir -p reports
+                    trivy image --severity HIGH,CRITICAL --ignore-unfixed --ignorefile .trivyignore \
+                      --format template --template "@/usr/local/share/trivy/html.tpl" --output reports/trivy-image.html $IMAGE:$IMAGE_TAG
+                    trivy image --severity HIGH,CRITICAL --ignore-unfixed --ignorefile .trivyignore \
+                      --format json --output reports/trivy-image.json $IMAGE:$IMAGE_TAG
+                    trivy image --severity HIGH,CRITICAL --ignore-unfixed --ignorefile .trivyignore \
+                      --exit-code 1 $IMAGE:$IMAGE_TAG
+                '''
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'reports/trivy-image.html,reports/trivy-image.json', allowEmptyArchive: true
+                    publishHTML(target: [
+                        allowMissing: true,
+                        alwaysLinkToLastBuild: true,
+                        keepAll: true,
+                        reportDir: 'reports',
+                        reportFiles: 'trivy-image.html',
+                        reportName: 'Trivy Image Scan'
+                    ])
+                }
+            }
+        }
+
         stage('Push Image (DockerHub)') {
             steps {
                 withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
@@ -73,6 +125,31 @@ pipeline {
                         docker push $IMAGE:$IMAGE_TAG
                         docker push $IMAGE:latest
                     '''
+                }
+            }
+        }
+
+        stage('Trivy Config Scan') {
+            steps {
+                sh '''
+                    mkdir -p reports
+                    trivy config --severity HIGH,CRITICAL --ignorefile .trivyignore --exit-code 0 \
+                      --format template --template "@/usr/local/share/trivy/html.tpl" --output reports/trivy-config.html k8s/ ansible/
+                    trivy config --severity HIGH,CRITICAL --ignorefile .trivyignore --exit-code 0 \
+                      --format json --output reports/trivy-config.json k8s/ ansible/
+                '''
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'reports/trivy-config.html,reports/trivy-config.json', allowEmptyArchive: true
+                    publishHTML(target: [
+                        allowMissing: true,
+                        alwaysLinkToLastBuild: true,
+                        keepAll: true,
+                        reportDir: 'reports',
+                        reportFiles: 'trivy-config.html',
+                        reportName: 'Trivy Config Scan'
+                    ])
                 }
             }
         }

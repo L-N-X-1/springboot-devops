@@ -1,4 +1,4 @@
-# Jenkins with Maven, Docker CLI, kubectl, Ansible and Semgrep preinstalled
+# Jenkins with Maven, Docker CLI, kubectl, Ansible, Semgrep and Trivy preinstalled
 FROM jenkins/jenkins:lts-jdk21
 
 USER root
@@ -13,6 +13,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python3 -m venv /opt/semgrep \
     && /opt/semgrep/bin/pip install --no-cache-dir semgrep \
     && ln -s /opt/semgrep/bin/semgrep /usr/local/bin/semgrep
+
+# Trivy and its HTML report template
+RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+        | sh -s -- -b /usr/local/bin \
+    && install -d /usr/local/share/trivy \
+    && curl -fsSL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/html.tpl \
+        -o /usr/local/share/trivy/html.tpl
+ENV TRIVY_CACHE_DIR=/var/jenkins_home/.cache/trivy
 
 # Docker CLI (talks to the host Docker daemon through the mounted socket)
 RUN install -m 0755 -d /etc/apt/keyrings \
@@ -38,4 +46,5 @@ RUN jenkins-plugin-cli --plugins \
         github \
         credentials-binding \
         junit \
+        htmlpublisher \
         pipeline-stage-view
