@@ -4,6 +4,9 @@ import json, os, pathlib, datetime, html
 R = pathlib.Path("reports")
 e = html.escape
 
+# Display threshold only: a score below this is shown in red. It never fails the build.
+OSCAP_MIN_SCORE = 85.0
+
 def load(name):
     p = R / name
     try:
@@ -45,6 +48,19 @@ def sonar():
     bad = [f"{c['metricKey']}={c.get('actualValue')}" for c in ps.get("conditions", []) if c.get("status") == "ERROR"]
     return ps["status"] + (f" - failed: {', '.join(bad)}" if bad else "")
 
+def openscap():
+    """Compliance score = pass / (pass + fail). Rules that do not apply or are not
+    selected by the profile are left out, otherwise the score would be meaningless."""
+    d = load("openscap.json")
+    if d is None:
+        return "not run"
+    p, f = d.get("pass", 0), d.get("fail", 0)
+    if p + f == 0:
+        return "no applicable rules were evaluated"
+    score = 100.0 * p / (p + f)
+    return (f"{score:.1f}% - {p} pass, {f} fail, {d.get('notapplicable', 0)} not applicable, "
+            f"{d.get('notchecked', 0)} not checked")
+
 def pods():
     p = R / "pods.txt"
     return p.read_text() if p.exists() else "not collected (deploy did not run)"
@@ -64,12 +80,19 @@ rows = [
     ("Trivy FS (deps)", trivy("fs")),
     ("Trivy Image", trivy("image")),
     ("Trivy Config", trivy("config")),
+    ("OpenSCAP (node compliance)", openscap()),
+    ("OpenSCAP full report", "LINK"),
 ]
 STATUS = {"Build", "Vault file encrypted", "Semgrep (SAST)", "SonarQube gate",
-          "Trivy FS (deps)", "Trivy Image", "Trivy Config"}
+          "Trivy FS (deps)", "Trivy Image", "Trivy Config", "OpenSCAP (node compliance)"}
 
-def cls(v):
+def cls(k, v):
     s = str(v)
+    if k == "OpenSCAP (node compliance)":
+        try:
+            return "ok" if float(s.split("%")[0]) >= OSCAP_MIN_SCORE else "bad"
+        except ValueError:
+            return "muted"
     if s.startswith(("YES", "OK", "0 findings", "0 critical, 0 high")) or "SUCCESS" in s:
         return "ok"
     if s.startswith(("not", "UNSTABLE")):
@@ -78,7 +101,15 @@ def cls(v):
 
 body = ""
 for k, v in rows:
-    val = f"<span class='b {cls(v)}'>{e(str(v))}</span>" if k in STATUS else e(str(v))
+    if v == "LINK":
+        if (R / "openscap.html").exists():
+            val = "<a href='openscap.html'>Open the OpenSCAP report</a>"
+        else:
+            val = "<span class='b muted'>not available</span>"
+    elif k in STATUS:
+        val = f"<span class='b {cls(k, v)}'>{e(str(v))}</span>"
+    else:
+        val = e(str(v))
     body += f"<tr><th>{e(k)}</th><td>{val}</td></tr>"
 
 CSS = """
@@ -92,6 +123,7 @@ table{width:100%;border-collapse:collapse}
 th,td{text-align:left;padding:12px 8px;border-bottom:1px solid var(--line);vertical-align:top}
 tr:last-child th,tr:last-child td{border-bottom:none}
 th{width:210px;color:var(--muted);font-weight:600}
+a{color:#2563eb}
 .b{display:inline-block;padding:3px 10px;border-radius:999px;font-size:.9em;font-weight:600}
 .ok{background:#dcfce7;color:#166534}.bad{background:#fee2e2;color:#991b1b}.muted{background:#e5e7eb;color:#4b5563}
 pre{background:#0f172a;color:#e2e8f0;padding:16px;border-radius:10px;overflow-x:auto;font-size:.85em}

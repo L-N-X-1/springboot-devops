@@ -213,6 +213,47 @@ pipeline {
                 }
             }
         }
+        stage('Compliance Scan (OpenSCAP)') {
+            steps {
+                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                    sh '''
+                        mkdir -p reports
+                        kubectl delete job oscap-run -n compliance --ignore-not-found
+                        kubectl create job oscap-run --from=cronjob/openscap-node-scan -n compliance || exit 1
+
+                        ok=0
+                        for i in $(seq 1 60); do
+                          s=$(kubectl get job oscap-run -n compliance -o jsonpath='{.status.succeeded}')
+                          f=$(kubectl get job oscap-run -n compliance -o jsonpath='{.status.failed}')
+                          if [ "$s" = "1" ]; then ok=1; break; fi
+                          if [ -n "$f" ] && [ "$f" != "0" ]; then break; fi
+                          sleep 10
+                        done
+                        if [ "$ok" != "1" ]; then
+                          kubectl logs job/oscap-run -n compliance --tail=30 || true
+                          echo "OpenSCAP scan did not complete"; exit 1
+                        fi
+
+                        # the Minikube node is a Docker container named "minikube"
+                        docker cp minikube:/data/openscap/latest.json reports/openscap.json
+                        docker cp minikube:/data/openscap/latest.html reports/openscap.html
+                    '''
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'reports/openscap.html,reports/openscap.json', allowEmptyArchive: true
+                    publishHTML(target: [
+                        allowMissing: true,
+                        alwaysLinkToLastBuild: true,
+                        keepAll: true,
+                        reportDir: 'reports',
+                        reportFiles: 'openscap.html',
+                        reportName: 'OpenSCAP Compliance Scan'
+                    ])
+                }
+            }
+        }
     }
 
     post {
