@@ -17,3 +17,15 @@ CVE-2026-68525
 # Reason: the scanner must read the Minikube node filesystem to audit it. Reviewed <date>.
 # Note: this file applies to every manifest, so an ID listed here is ignored for the
 # application too. Prefer a path-scoped .trivyignore.yaml if the app manifests should stay covered.
+
+# Reviewed Trivy misconfiguration exceptions, scoped to specific files.
+# Every entry needs a statement (reason) and an expired_at date (forces a re-review).
+# Vulnerability (CVE) exceptions stay in .trivyignore.
+misconfigurations:
+  - id: DS-0002
+    paths:
+      - compliance/Dockerfile
+    statement: >-
+      The OpenSCAP scanner image must run as root to read root-only files of the
+      Minikube node mounted at /host. Reviewed 2026-10-07.
+    expired_at: 2027-01-07

@@ -155,11 +155,11 @@ pipeline {
             steps {
                 sh '''
                     mkdir -p reports
-                    trivy config --severity HIGH,CRITICAL --ignorefile .trivyignore --exit-code 0 \
+                    trivy config --severity HIGH,CRITICAL --ignorefile .trivyignore.yaml --exit-code 0 \
                       --skip-dirs target --skip-dirs infra \
                       --format template --template @/usr/local/share/trivy/html.tpl \
                       --output reports/trivy-config.html .
-                    trivy config --severity HIGH,CRITICAL --ignorefile .trivyignore --exit-code 0 \
+                    trivy config --severity HIGH,CRITICAL --ignorefile .trivyignore.yaml --exit-code 0 \
                       --skip-dirs target --skip-dirs infra \
                       --format json --output reports/trivy-config.json .
                 '''
