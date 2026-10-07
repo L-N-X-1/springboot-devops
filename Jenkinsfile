@@ -31,7 +31,15 @@ pipeline {
 
         stage('Security Scan (Semgrep)') {
             steps {
-                sh 'semgrep scan --config auto --error .'
+                sh '''
+                    mkdir -p reports
+                    semgrep scan --config auto --error --json --output reports/semgrep.json .
+                '''
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'reports/semgrep.json', allowEmptyArchive: true
+                }
             }
         }
 
@@ -70,6 +78,19 @@ pipeline {
                           -Dsonar.token=$SONAR_TOKEN \
                           -Dsonar.qualitygate.wait=true
                     '''
+                }
+            }
+            post {
+                always {
+                    withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
+                        sh '''
+                            mkdir -p reports
+                            KEY=$(grep '^projectKey=' target/sonar/report-task.txt | cut -d= -f2)
+                            curl -s -u "$SONAR_TOKEN:" \
+                              "$SONAR_HOST_URL/api/qualitygates/project_status?projectKey=$KEY" \
+                              -o reports/sonar-gate.json || true
+                        '''
+                    }
                 }
             }
         }
@@ -170,6 +191,9 @@ pipeline {
                         ansible-playbook -i ansible/inventory.ini ansible/deploy.yml \
                           --vault-password-file "$VAULT_FILE" \
                           -e image=$IMAGE -e tag=$IMAGE_TAG
+                        mkdir -p reports
+                        { echo "== devops =="; kubectl get pods -n devops -o wide
+                          echo; echo "== monitoring =="; kubectl get pods -n monitoring; } > reports/pods.txt || true
                     '''
                 }
             }
@@ -178,8 +202,19 @@ pipeline {
 
     post {
         always {
+            sh "BUILD_RESULT=${currentBuild.currentResult} python3 scripts/generate-report.py || true"
+            archiveArtifacts artifacts: 'reports/pipeline-report.html', allowEmptyArchive: true
+            publishHTML(target: [
+                allowMissing: true,
+                alwaysLinkToLastBuild: true,
+                keepAll: true,
+                reportDir: 'reports',
+                reportFiles: 'pipeline-report.html',
+                reportName: 'Pipeline Report'
+            ])
             sh 'docker logout || true'
             sh 'docker image prune -f || true'
+            sh "BUILD_RESULT=${currentBuild.currentResult} DURATION='${currentBuild.durationString}' python3 scripts/generate-report.py || true"
         }
         success {
             echo "Deployed ${IMAGE}:${IMAGE_TAG} to Kubernetes"
