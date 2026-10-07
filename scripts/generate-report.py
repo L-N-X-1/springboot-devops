@@ -65,9 +65,41 @@ rows = [
     ("Trivy Image", trivy("image")),
     ("Trivy Config", trivy("config")),
 ]
-body = "".join(f"<tr><th align=left>{e(a)}</th><td>{e(str(b))}</td></tr>" for a, b in rows)
+STATUS = {"Build", "Vault file encrypted", "Semgrep (SAST)", "SonarQube gate",
+          "Trivy FS (deps)", "Trivy Image", "Trivy Config"}
+
+def cls(v):
+    s = str(v)
+    if s.startswith(("YES", "OK", "0 findings", "0 critical, 0 high")) or "SUCCESS" in s:
+        return "ok"
+    if s.startswith(("not", "UNSTABLE")):
+        return "muted"
+    return "bad"
+
+body = ""
+for k, v in rows:
+    val = f"<span class='b {cls(v)}'>{e(str(v))}</span>" if k in STATUS else e(str(v))
+    body += f"<tr><th>{e(k)}</th><td>{val}</td></tr>"
+
+CSS = """
+:root{--bg:#f4f6fa;--card:#fff;--text:#1f2937;--muted:#6b7280;--line:#e5e7eb}
+@media(prefers-color-scheme:dark){:root{--bg:#0f172a;--card:#1e293b;--text:#e2e8f0;--muted:#94a3b8;--line:#334155}}
+body{font-family:system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--text);margin:0;padding:32px}
+.wrap{max-width:860px;margin:auto}
+h2{margin:0 0 20px}h3{margin:28px 0 10px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:8px 20px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:12px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child th,tr:last-child td{border-bottom:none}
+th{width:210px;color:var(--muted);font-weight:600}
+.b{display:inline-block;padding:3px 10px;border-radius:999px;font-size:.9em;font-weight:600}
+.ok{background:#dcfce7;color:#166534}.bad{background:#fee2e2;color:#991b1b}.muted{background:#e5e7eb;color:#4b5563}
+pre{background:#0f172a;color:#e2e8f0;padding:16px;border-radius:10px;overflow-x:auto;font-size:.85em}
+"""
+
 R.mkdir(exist_ok=True)
 (R / "pipeline-report.html").write_text(
-    "<html><body style='font-family:sans-serif'><h2>Pipeline report</h2>"
-    f"<table border=1 cellpadding=6 style='border-collapse:collapse'>{body}</table>"
-    f"<h3>Deployed pods</h3><pre>{e(pods())}</pre></body></html>")
+    f"<!doctype html><html><head><meta charset='utf-8'><title>Pipeline report</title>"
+    f"<style>{CSS}</style></head><body><div class='wrap'><h2>Pipeline report</h2>"
+    f"<div class='card'><table>{body}</table></div>"
+    f"<h3>Deployed pods</h3><pre>{e(pods())}</pre></div></body></html>")

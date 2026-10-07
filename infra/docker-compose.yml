@@ -10,7 +10,9 @@ services:
       - "8080:8080"
     env_file: .env
     environment:
-      JAVA_OPTS: "-Djenkins.install.runSetupWizard=false"
+      JAVA_OPTS: >-
+        -Djenkins.install.runSetupWizard=false
+        -Dhudson.model.DirectoryBrowserSupport.CSP="sandbox allow-scripts; default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;"
       CASC_JENKINS_CONFIG: /casc/jenkins.yaml
       KUBECONFIG: /kube/config
 
