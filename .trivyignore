@@ -1,6 +1,19 @@
 # Reviewed Trivy exceptions only; document and review each ignored vulnerability before adding it here.
+# Every entry needs a reason and a review date.
+
 # CVE-2026-47884 spring-webmvc XsltView RCE - XSLT views not used; reviewed 2026-10-06
 CVE-2026-47884
+
+
 CVE-2026-65182
+
 CVE-2026-65905
+
 CVE-2026-68525
+
+# --- OpenSCAP node scanner (k8s/compliance/cronjob.yaml.j2) ---
+# Add these only after they appear in the trivy-config report, using the exact IDs shown there.
+# Likely candidates (verify first): privileged container and hostPath volume.
+# Reason: the scanner must read the Minikube node filesystem to audit it. Reviewed <date>.
+# Note: this file applies to every manifest, so an ID listed here is ignored for the
+# application too. Prefer a path-scoped .trivyignore.yaml if the app manifests should stay covered.

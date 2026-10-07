@@ -1,0 +1,10 @@
+title = "springboot-devops gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Upstream ComplianceAsCode SCAP datastream: benchmark text, not real credentials"
+paths = [
+    '''compliance/ssg-debian12-ds\.xml''',
+]

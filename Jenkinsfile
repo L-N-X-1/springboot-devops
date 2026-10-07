@@ -15,6 +15,7 @@ pipeline {
         // DOCKERHUB_USER, SONAR_HOST_URL and NEXUS_URL are global vars set in infra/jenkins/casc.yaml
         IMAGE     = "${env.DOCKERHUB_USER}/springboot-devops"
         IMAGE_TAG = "${env.BUILD_NUMBER}"
+        SCANNER_IMAGE = "${env.DOCKERHUB_USER}/openscap-scanner"
     }
 
     stages {
@@ -174,6 +175,20 @@ pipeline {
                         reportFiles: 'trivy-config.html',
                         reportName: 'Trivy Config Scan'
                     ])
+                }
+            }
+        }
+
+        stage('Build & Push OpenSCAP Scanner') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
+                        usernameVariable: 'DH_USER', passwordVariable: 'DH_TOKEN')]) {
+                    sh '''
+                        echo "$DH_TOKEN" | docker login -u "$DH_USER" --password-stdin
+                        docker build -t $SCANNER_IMAGE:$IMAGE_TAG -t $SCANNER_IMAGE:latest compliance/
+                        docker push $SCANNER_IMAGE:$IMAGE_TAG
+                        docker push $SCANNER_IMAGE:latest
+                    '''
                 }
             }
         }

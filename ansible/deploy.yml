@@ -8,6 +8,9 @@
     tag: "latest"
     k8s_dir: "{{ playbook_dir }}/../k8s"
     rendered: "/tmp/springboot-deployment.yaml"
+    # Scanner image lives in the same Docker Hub account as the app image
+    scanner_image: "{{ image.split('/')[0] }}/openscap-scanner"
+    scanner_rendered: "/tmp/openscap-cronjob.yaml"
 
   tasks:
     - name: Check the cluster is reachable
@@ -58,6 +61,19 @@
       ansible.builtin.command: kubectl rollout status deployment/springboot-app -n devops --timeout=300s
       changed_when: false
 
+    - name: Render OpenSCAP CronJob with image {{ scanner_image }}:{{ tag }}
+      ansible.builtin.template:
+        src: "{{ k8s_dir }}/compliance/cronjob.yaml.j2"
+        dest: "{{ scanner_rendered }}"
+        mode: "0644"
+      vars:
+        openscap_image: "{{ scanner_image }}:{{ tag }}"
+
+    - name: Apply OpenSCAP CronJob (compliance namespace + nightly node scan)
+      ansible.builtin.command: kubectl apply -f {{ scanner_rendered }}
+      register: oscap
+      changed_when: "'created' in oscap.stdout or 'configured' in oscap.stdout"
+
     - name: Show running pods
       ansible.builtin.command: kubectl get pods -n devops -o wide
       register: pods
@@ -66,4 +82,3 @@
     - name: Pods
       ansible.builtin.debug:
         var: pods.stdout_lines
-

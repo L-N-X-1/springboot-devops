@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: compliance
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: openscap-node-scan
+  namespace: compliance
+spec:
+  schedule: "0 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 900
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: openscap
+              image: "{{ openscap_image }}"
+              imagePullPolicy: IfNotPresent
+              securityContext:
+                privileged: true
+              volumeMounts:
+                - name: host
+                  mountPath: /host
+                  readOnly: true
+                - name: results
+                  mountPath: /results
+          volumes:
+            - name: host
+              hostPath:
+                path: /
+            - name: results
+              hostPath:
+                path: /data/openscap
+                type: DirectoryOrCreate

@@ -1,3 +1,9 @@
+# The OpenSCAP datastream is a large upstream XML file (~15 MB). It is excluded from
+# the filename-based hooks below so that check-added-large-files keeps its default
+# 500 KB limit for everything else, and so trailing-whitespace cannot rewrite it and
+# detect-private-key cannot false-positive on the benchmark text.
+exclude: ^compliance/ssg-debian12-ds\.xml$
+
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
