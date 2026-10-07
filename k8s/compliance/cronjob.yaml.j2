@@ -23,6 +23,8 @@ spec:
             - name: openscap
               image: "{{ openscap_image }}"
               imagePullPolicy: IfNotPresent
+              # Accepted risk: privileged + hostPath are required to audit the node filesystem.
+              # Scope: nightly Job, read-only mount of /, no network service. Reviewed 2026-10-07.
               securityContext:
                 privileged: true
               volumeMounts:
