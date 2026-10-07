@@ -235,8 +235,8 @@ pipeline {
                         fi
 
                         # the Minikube node is a Docker container named "minikube"
-                        docker cp minikube:/data/openscap/latest.json reports/openscap.json
-                        docker cp minikube:/data/openscap/latest.html reports/openscap.html
+                        docker exec minikube cat /data/openscap/latest.json > reports/openscap.json || { rm -f reports/openscap.json; exit 1; }
+                        docker exec minikube cat /data/openscap/latest.html > reports/openscap.html || { rm -f reports/openscap.html; exit 1; }
                     '''
                 }
             }
