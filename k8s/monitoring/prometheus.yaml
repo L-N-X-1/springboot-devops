@@ -85,6 +85,7 @@ spec:
         - name: prometheus
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
           image: prom/prometheus:v3.13.3
           args:
             - --config.file=/etc/prometheus/prometheus.yml

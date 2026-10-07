@@ -295,6 +295,7 @@ spec:
         - name: grafana
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
           image: grafana/grafana:13.1.5
           env:
             - name: GF_SECURITY_ADMIN_USER
@@ -319,6 +320,12 @@ spec:
               mountPath: /etc/grafana/provisioning/dashboards
             - name: dashboards
               mountPath: /var/lib/grafana/dashboards
+            - name: grafana-data
+              mountPath: /var/lib/grafana
+            - name: grafana-logs
+              mountPath: /var/log/grafana
+            - name: grafana-tmp
+              mountPath: /tmp
       volumes:
         - name: datasources
           configMap:
@@ -329,6 +336,12 @@ spec:
         - name: dashboards
           configMap:
             name: grafana-dashboards
+        - name: grafana-data
+          emptyDir: {}
+        - name: grafana-logs
+          emptyDir: {}
+        - name: grafana-tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
