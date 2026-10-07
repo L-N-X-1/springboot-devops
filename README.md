@@ -1,14 +1,6 @@
 # Spring Boot DevSecOps Pipeline
 
-A Product, Category, and Customer REST API delivered through a local, end-to-end DevSecOps pipeline. A developer commit is checked before it leaves the workstation; Jenkins then builds, tests, scans, analyzes, publishes, packages, deploys with encrypted secrets, monitors the application, and produces a report for every run.
-
-## What's new
-
-- **Ansible Vault** now protects deployment secrets. The Grafana admin password is encrypted in Git (`ansible/group_vars/all/vault.yml`), decrypted only at deploy time, and injected into Kubernetes as a `Secret` consumed through `secretKeyRef`. The hardcoded `admin/admin` is gone.
-- **Vault password handled as a Jenkins credential** (`ansible-vault-pass`), created by Configuration as Code from `infra/.env`. The temporary password file used during the deploy stage is deleted on exit.
-- **Per-run pipeline report**: `scripts/generate-report.py` builds a styled HTML summary (build info, vault check, Semgrep, SonarQube gate, Trivy counts, deployed pods) published as **Pipeline Report** on every build, even failed ones.
-- **Semgrep results retained** as `reports/semgrep.json`; the SonarQube gate status is captured for the report.
-- **Updated project tree and documentation**, including the DevSecOps phase breakdown below.
+A Product, Category, and Customer REST API delivered through a local, end-to-end DevSecOps pipeline. A developer commit is checked before it leaves the workstation; Jenkins then builds, tests, scans, analyzes, publishes, packages, deploys with encrypted secrets, monitors the application, audits the Kubernetes node against the CIS benchmark, and produces a report for every run.
 
 ## Architecture
 
@@ -27,8 +19,10 @@ flowchart LR
         D --> TI[Trivy Image<br/>Container image scan]
         TI --> H[Docker Hub<br/>Push versioned & latest image]
         H --> TC[Trivy Config<br/>IaC/config scan]
-        TC --> A[Ansible + Ansible Vault<br/>Deploy application & monitoring]
-        A --> R[Pipeline report<br/>HTML summary]
+        TC --> OB[Docker<br/>Build & push OpenSCAP scanner]
+        OB --> A[Ansible + Ansible Vault<br/>Deploy application, monitoring & CronJob]
+        A --> OS[OpenSCAP<br/>Compliance scan + report]
+        OS --> R[Pipeline report<br/>HTML summary]
       end
       SQ[SonarQube]
       NX[Nexus]
@@ -40,10 +34,15 @@ flowchart LR
         P[Prometheus]
         GR[Grafana]
         K -->|/actuator/prometheus| P --> GR
+        CJ[OpenSCAP CronJob<br/>nightly CIS scan]
+        ND[Minikube node<br/>Debian 12]
+        CJ -->|scans /host| ND
       end
       A --> K
       A -->|K8s Secret| GR
       A --> P
+      A -->|deploys| CJ
+      CJ -->|latest.json / latest.html| OS
     end
 ```
 
@@ -51,7 +50,7 @@ The Jenkins container, SonarQube, Nexus, and Minikube run locally. Jenkins conne
 
 ## DevSecOps implementation
 
-Security is applied in three phases, each with its own tooling.
+Security is applied in four phases, each with its own tooling.
 
 ### Development phase
 
@@ -61,27 +60,29 @@ This phase has two sections.
 
 [pre-commit](https://pre-commit.com) is a framework that runs checks automatically on staged files when `git commit` is executed, and blocks the commit if a check fails. It is the earliest security control in the project, because problems are caught on the developer's machine before they reach Git history or GitHub. Configured hooks cover YAML validity, trailing whitespace, oversized file additions, exposed private keys, secrets detection with Gitleaks, and sensitive filenames (custom script `scripts/check-sensitive-filenames.sh`).
 
-**Commit (CI): Semgrep**
+The upstream SCAP datastream `compliance/ssg-debian12-ds.xml` (about 15 MB) is excluded from the file-content hooks, and allowlisted by path in `.gitleaks.toml`, because it is unmodified benchmark text that triggers false positives (for example the GRUB2 password rule description).
+
+**Commit (CI): Semgrep as SAST**
 
 [Semgrep](https://semgrep.dev) is a static application security testing (SAST) tool. It reads the source code without running it and matches patterns for vulnerabilities such as injection flaws, insecure configurations, and unsafe API usage. It runs in Jenkins as `semgrep scan --config auto --error .`, so any finding stops the pipeline, and results are saved to `reports/semgrep.json`. It acts as the server-side safety net for the local hooks, which can be bypassed.
 
 ### Acceptance phase
 
-**Trivy**
+**Trivy: dependency, image and configuration scanning**
 
-[Trivy](https://trivy.dev) is an open-source scanner from Aqua Security. It is used in three modes:
+[Trivy](https://trivy.dev) is an open-source scanner from Aqua Security. It inspects artifacts and configuration files without running the application, so it covers software composition analysis (SCA), container image scanning and infrastructure-as-code scanning. It is not a DAST tool, because it does not attack a running application. It is used in three modes:
 
 | Mode | Target | Finds | Behavior |
 |---|---|---|---|
 | `trivy fs` | Repository dependencies (`pom.xml`) | Known vulnerabilities in libraries (SCA) | Report |
 | `trivy image` | The built Docker image | HIGH and CRITICAL vulnerabilities in OS packages and the app | **Fails the build** before the image is pushed |
-| `trivy config` | Kubernetes manifests, Ansible, Dockerfile | Misconfigurations (IaC scanning) | Report only |
+| `trivy config` | Kubernetes manifests, Ansible, Dockerfiles | Misconfigurations (IaC scanning) | Report only |
 
-HTML and JSON reports are archived for every build.
+HTML and JSON reports are archived for every build. Vulnerability exceptions live in `.trivyignore`, misconfiguration exceptions in `.trivyignore.yaml` (see [Exceptions policy](#exceptions-policy)).
 
 ### Production phase
 
-**Ansible Vault**
+**Ansible Vault: secrets management**
 
 [Ansible Vault](https://docs.ansible.com/ansible/latest/vault_guide/index.html) encrypts sensitive variables with AES256 so they can be stored safely in Git. Here it protects the secrets used at deploy time:
 
@@ -91,6 +92,78 @@ HTML and JSON reports are archived for every build.
 - The Grafana Deployment reads the password through `secretKeyRef`; no plain-text password exists in any manifest.
 
 **Known limits:** there is no automatic rotation or audit log, and Kubernetes Secrets are only base64-encoded unless etcd encryption is enabled. HashiCorp Vault or OpenBao is the production-grade upgrade path.
+
+### Operation phase
+
+**OpenSCAP: continuous compliance scanning**
+
+[OpenSCAP](https://www.open-scap.org) checks a system's configuration against a compliance profile using SCAP content from the ComplianceAsCode project. It does not scan code or dependencies (Semgrep and Trivy do that). It adds an OS-level view: is the machine the workloads run on configured securely, and does that stay true over time?
+
+**What is scanned.** The Minikube node (with the Docker driver, a containerized Debian 12 system), against **CIS Debian Benchmark Level 1 - Server** (`xccdf_org.ssgproject.content_profile_cis_level1_server`).
+
+**How it runs.**
+
+| Piece | Location | Role |
+|---|---|---|
+| Scanner image | `compliance/Dockerfile` | Debian 12 with `openscap-scanner`, the pinned datastream `ssg-debian12-ds.xml` (scap-security-guide 0.1.82), and the scripts below |
+| Scan script | `compliance/scan.sh` | Runs `oscap xccdf eval` with `OSCAP_PROBE_ROOT=/host`, writes ARF and HTML reports, then `latest.html` and `latest.json`; keeps the 7 most recent runs |
+| Summarizer | `compliance/summarize.py` | Counts rule results into JSON (parsed with `defusedxml`) |
+| CronJob | `k8s/compliance/cronjob.yaml.j2` | Nightly at 02:00 in the `compliance` namespace; mounts the node's `/` read-only at `/host` and stores results in `/data/openscap` on the node |
+| Pipeline stages | `Jenkinsfile` | Two stages: **Build & Push OpenSCAP Scanner** and **Compliance Scan (OpenSCAP)** (details below) |
+| Deployment | `ansible/deploy.yml` | Renders and applies the CronJob; the scanner image is derived from the `image` variable |
+
+**The two OpenSCAP pipeline stages.**
+
+*Build & Push OpenSCAP Scanner* runs after Trivy Config Scan and before the Ansible deploy:
+
+- Logs in to Docker Hub with the `dockerhub-creds` credential.
+- Builds the image from `compliance/` (its own build context) and tags it `openscap-scanner:<build-number>` and `:latest`.
+- Pushes both tags.
+- It must run before the deploy, because Ansible renders the CronJob with this build's tag and the Minikube node pulls the image from Docker Hub.
+
+*Compliance Scan (OpenSCAP)* runs after Deploy to Kubernetes (Ansible), as the last stage:
+
+- Deletes any previous `oscap-run` Job, then creates a new one from the deployed `openscap-node-scan` CronJob. This runs the same scan as the nightly schedule, against the image from this build.
+- Polls the Job every 10 seconds for up to 10 minutes. It stops early if the pod fails and prints the pod logs.
+- Copies `latest.json` and `latest.html` out of the node with `docker exec minikube cat` (`docker cp` does not read `/data` on the node reliably) into `reports/openscap.json` and `reports/openscap.html`.
+- Archives both files and publishes the HTML as **OpenSCAP Compliance Scan** on the build page. `generate-report.py` reads the JSON to add the score and counts to the Pipeline Report.
+- Wrapped in `catchError`: if the scan cannot run, the build is marked `UNSTABLE` and not failed, because the application is already deployed and the Pipeline Report must still be generated. Failing compliance rules never fail the build (report-only policy).
+
+**Continuity.** The CronJob scans every night at 02:00; the stage above adds a scan after every deployment.
+
+**Score.** `pass / (pass + fail)`. Rules that are `notapplicable` (for example SSH server rules on a node without sshd), `notselected` (not part of the profile) or `notchecked` (need manual review) are excluded, so they do not distort the score. The Pipeline Report shows the score as green at or above 85 % (`OSCAP_MIN_SCORE` in `scripts/generate-report.py`) and red below. It is display only and never fails the build: the policy is **report only**.
+
+**Baseline scan (first run).** 887 rules in the datastream: 126 pass, 12 fail, 261 not applicable, 4 not checked, 484 not selected. Score 91.3 %.
+
+#### Reviewed findings
+
+The 12 failing rules of the baseline scan were reviewed one by one. Only part of the CIS benchmark applies to a containerized node, and changes made inside the node disappear on `minikube delete`.
+
+| Rule | Decision | Reason |
+|---|---|---|
+| `package_pam_pwquality_installed` | Accepted | The node has no password logins. Installing the package would also activate many password-quality rules that are not applicable today. |
+| `use_pam_wheel_group_for_su` | Fix (`harden-node.sh`) | Restricts `su` to an empty group; `sudo` and `minikube ssh` are not affected. |
+| `file_permission_user_init_files` | Fix (`harden-node.sh`) | `chmod` on user initialization files. |
+| `file_permissions_home_directories` | Fix (`harden-node.sh`) | `chmod` on home directories. |
+| `root_path_all_dirs`, `root_path_no_dot` | Unverified | No automatic fix exists. These may be false positives, depending on which PATH the scanner evaluates. |
+| `accounts_umask_etc_bashrc`, `accounts_umask_etc_profile` | Fix (`harden-node.sh`) | Default umask 027; affects only new login shells. |
+| `package_iptables-persistent_installed` | Accepted | kube-proxy manages the node's firewall rules; restoring saved rules at boot would conflict. |
+| `set_nftables_base_chain` | Accepted | The fix creates empty accept-all chains purely to satisfy the check; it adds no security and could interfere with pod networking. |
+| `permissions_local_var_log` | Fix (`harden-node.sh`) | Non-recursive: only files directly in `/var/log`, so pod logs are untouched. |
+| `package_rsync_removed` | Accepted | Not confirmed safe to remove; `apt remove` can pull out dependent packages. |
+
+`compliance/harden-node.sh` is a reviewed, trimmed version of the fix script that OpenSCAP generates (`oscap xccdf generate fix`). It is run manually against the node, is safe to re-run, and must be re-run after `minikube delete`. It is not executed by the pipeline. Never run the unreviewed generated script, and never run any of these scripts on your own workstation.
+
+#### Accepted risks and limits
+
+- **Privileged scanner pod.** The scan needs host access, so the CronJob runs `privileged: true` with a read-only `hostPath` mount of `/`. Scope: a nightly, short-lived Job with no network service. The decision is documented next to `securityContext` in the template.
+- **Root scanner image.** `compliance/Dockerfile` runs as root to read root-only files on the node. Trivy rule `DS-0002` is excepted in `.trivyignore.yaml` for this file only (expires 2027-01-07, then it must be re-reviewed). Semgrep's matching finding is suppressed with an inline `nosemgrep` comment and reason.
+- **Templates are not scanned.** Semgrep and Trivy only parse `.yaml` and `.yml` files as Kubernetes manifests, so `cronjob.yaml.j2` (and the existing `deployment.yaml.j2`) are not analyzed by them.
+- **Draft content.** The Debian 12 datastream is marked `draft` upstream.
+- **No remote OVAL.** The scan runs without `--fetch-remote-resources`, so the patch-level rules that need Debian's remote OVAL file are skipped. Trivy covers vulnerabilities.
+- **Local reports only.** Results are kept in `/data/openscap` on the node (last 7 runs) and in Jenkins artifacts. They are lost with `minikube delete`.
+
+**Operate and monitor.** Spring Boot Actuator, Prometheus and Grafana continue to provide application metrics and dashboards.
 
 ## DevSecOps phases and controls
 
@@ -105,9 +178,10 @@ HTML and JSON reports are archived for every build.
 | Artifact management | Nexus Repository | Maven publishes the versioned JAR to the snapshots or releases repository. |
 | Containerize and release | Docker + Docker Hub | A multi-stage Dockerfile produces a non-root Java 17 runtime image. Jenkins pushes the build-number tag and `latest`. |
 | Acceptance (image) | Trivy Image | Scans the built image for HIGH and CRITICAL vulnerabilities before it can be pushed. |
-| Acceptance (IaC/config) | Trivy Config | Reports HIGH and CRITICAL misconfigurations in Kubernetes manifests, Ansible, and the Dockerfile. |
+| Acceptance (IaC/config) | Trivy Config | Reports HIGH and CRITICAL misconfigurations in Kubernetes manifests, Ansible, and Dockerfiles, honoring scoped exceptions in `.trivyignore.yaml`. |
 | Production (secrets) | Ansible Vault | Encrypts deployment secrets in Git and delivers them to Kubernetes as `Secret` objects. |
-| Deploy | Ansible + Kubernetes / Minikube | Renders the image tag, applies app manifests, creates secrets, deploys monitoring, and waits for the rollout. |
+| Deploy | Ansible + Kubernetes / Minikube | Renders the image tag, applies app manifests, creates secrets, deploys monitoring and the OpenSCAP CronJob, and waits for the rollout. |
+| Operate (compliance) | OpenSCAP | Nightly and per-run CIS Debian 12 Level 1 scan of the Minikube node; HTML report in Jenkins, score in the Pipeline Report. |
 | Operate and monitor | Spring Boot Actuator + Prometheus + Grafana | Prometheus scrapes application metrics; Grafana provides the application dashboard. |
 | Reporting | `generate-report.py` | A styled HTML summary of every run, published in Jenkins. |
 
@@ -125,21 +199,24 @@ The hook configuration is in [`.pre-commit-config.yaml`](.pre-commit-config.yaml
 
 ## Pipeline sequence
 
-The pipeline is defined in [`Jenkinsfile`](Jenkinsfile) and runs in this order:
+The pipeline is defined in [`Jenkinsfile`](Jenkinsfile) and runs these stages in order:
 
-1. Build, test, and collect coverage with Maven.
-2. Scan the repository with Semgrep (JSON report retained).
-3. Run the Trivy filesystem dependency scan and retain HTML and JSON reports.
-4. Submit quality and coverage analysis to SonarQube; wait for its quality gate.
-5. Publish the Maven artifact to Nexus.
-6. Build the Docker image using a multi-stage Dockerfile.
-7. Scan the image with Trivy; HIGH and CRITICAL findings stop the image from being pushed.
-8. Push `<dockerhub-user>/springboot-devops:<jenkins-build-number>` and `:latest` to Docker Hub.
-9. Run the report-only Trivy configuration scan (repository root, excluding `target/` and `infra/`).
-10. Run Ansible with the vault password to create the Grafana Secret and deploy that exact image tag to Minikube, then apply Prometheus and Grafana.
-11. Generate the **Pipeline Report** (runs on every build, including failures).
+1. **Declarative: Checkout SCM**: Jenkins checks out the repository (GitHub webhook, or SCM polling about every two minutes).
+2. **Build & Test (Maven)**: compile, run tests, collect coverage.
+3. **Security Scan (Semgrep)**: SAST scan; any finding stops the pipeline; JSON report retained.
+4. **Trivy FS Scan**: dependency scan of the repository; HTML and JSON reports retained.
+5. **Code Quality (SonarQube)**: submit analysis and coverage; wait for the quality gate.
+6. **Publish Artifact (Nexus)**: publish the Maven artifact.
+7. **Build Image (Docker)**: multi-stage image build.
+8. **Trivy Image Scan**: HIGH and CRITICAL findings stop the image from being pushed.
+9. **Push Image (DockerHub)**: push `<dockerhub-user>/springboot-devops:<build-number>` and `:latest`.
+10. **Trivy Config Scan**: report-only IaC and configuration scan (repository root, excluding `target/` and `infra/`).
+11. **Build & Push OpenSCAP Scanner**: build `compliance/` and push `<dockerhub-user>/openscap-scanner:<build-number>` and `:latest`.
+12. **Deploy to Kubernetes (Ansible)**: with the vault password, create the Grafana Secret, deploy the application image tag, then apply Prometheus, Grafana and the OpenSCAP CronJob (which uses the scanner image from stage 11).
+13. **Compliance Scan (OpenSCAP)**: run the node scan as a one-off Job, collect `openscap.json` and `openscap.html`, publish them. A failure here marks the build `UNSTABLE`, not failed.
+14. **Pipeline Report** (post-build, runs on every build, including failures).
 
-Any failed stage stops the later stages, so an image is not built, published, or deployed after a failed test, Semgrep scan, Trivy image scan, or SonarQube gate.
+Any failed stage from 2 to 12 stops the later stages, so an image is not built, published, or deployed after a failed test, Semgrep scan, Trivy image scan, or SonarQube gate.
 
 ## Reports
 
@@ -147,13 +224,14 @@ Each Jenkins build retains these files under **Build → Artifacts**:
 
 | File | Content |
 |---|---|
-| `pipeline-report.html` | Run summary: build result, duration, image, commit, vault encryption check, Semgrep, SonarQube gate, Trivy counts, deployed pods |
+| `pipeline-report.html` | Run summary: build result, duration, image, commit, vault encryption check, Semgrep, SonarQube gate, Trivy counts, OpenSCAP score and counts, deployed pods |
 | `semgrep.json` | Semgrep findings |
 | `trivy-fs.html` / `.json` | Dependency vulnerabilities |
 | `trivy-image.html` / `.json` | Container image vulnerabilities |
 | `trivy-config.html` / `.json` | IaC and configuration misconfigurations |
+| `openscap.html` / `.json` | Full CIS compliance report of the node, and its pass/fail/not-applicable counts |
 
-The build page also shows **Pipeline Report**, **Trivy FS Scan**, **Trivy Image Scan**, and **Trivy Config Scan** links from the HTML Publisher plugin.
+The build page also shows **Pipeline Report**, **Trivy FS Scan**, **Trivy Image Scan**, **Trivy Config Scan**, and **OpenSCAP Compliance Scan** links from the HTML Publisher plugin.
 
 Jenkins blocks inline CSS in HTML reports by default. `infra/docker-compose.yml` relaxes the `hudson.model.DirectoryBrowserSupport.CSP` setting so the styled reports render correctly.
 
@@ -165,9 +243,20 @@ docker cp jenkins:/var/jenkins_home/workspace/springboot-devops/reports ./report
 
 `reports/` is not committed to Git (it is listed in `.gitignore`).
 
+The nightly scans stay on the node. To read the latest one directly:
+
+```bash
+docker exec minikube cat /data/openscap/latest.json
+docker exec minikube ls /data/openscap
+```
+
 ### Exceptions policy
 
-Trivy vulnerability exceptions live in [`.trivyignore`](.trivyignore). Every entry must include a comment with the reason and a review date. Prefer fixing the dependency or base image over ignoring a finding.
+- Trivy vulnerability exceptions live in [`.trivyignore`](.trivyignore). Every entry must include a comment with the reason and a review date.
+- Trivy misconfiguration exceptions live in [`.trivyignore.yaml`](.trivyignore.yaml). They are scoped to specific paths, carry a `statement` (reason) and an `expired_at` date, and are used only by the `trivy config` scans. Once an exception expires, the finding comes back and must be re-reviewed.
+- Gitleaks exceptions live in [`.gitleaks.toml`](.gitleaks.toml) and are limited to the upstream SCAP datastream.
+
+Prefer fixing the dependency, image or configuration over ignoring a finding.
 
 ## Repository layout
 
@@ -178,11 +267,14 @@ Trivy vulnerability exceptions live in [`.trivyignore`](.trivyignore). Every ent
 ├── Jenkinsfile              CI/CD and security pipeline
 ├── .pre-commit-config.yaml  Developer-side quality and secret checks
 ├── .trivyignore             Reviewed Trivy vulnerability exceptions
+├── .trivyignore.yaml        Scoped, dated Trivy misconfiguration exceptions
+├── .gitleaks.toml           Gitleaks allowlist for the SCAP datastream
 ├── scripts/                 Sensitive-file-name hook and pipeline report generator
 ├── ci/                      Maven settings used for Nexus publishing
 ├── infra/                   Docker Compose, Jenkins image, JCasC, setup helpers
 ├── ansible/                 Deployment playbook and Ansible Vault secrets
-└── k8s/                     Application and monitoring manifests
+├── compliance/              OpenSCAP scanner image and node hardening script
+└── k8s/                     Application, monitoring and compliance manifests
 ```
 
 ## Project tree
@@ -191,9 +283,11 @@ Trivy vulnerability exceptions live in [`.trivyignore`](.trivyignore). Every ent
 springboot-devops/
 ├── .dockerignore
 ├── .gitignore
+├── .gitleaks.toml
 ├── .pre-commit-config.yaml
 ├── .semgrepignore
 ├── .trivyignore
+├── .trivyignore.yaml
 ├── Dockerfile
 ├── Jenkinsfile
 ├── README.md
@@ -207,6 +301,12 @@ springboot-devops/
 │           └── vault.yml          # encrypted with Ansible Vault
 ├── ci/
 │   └── maven-settings.xml
+├── compliance/
+│   ├── Dockerfile                 # OpenSCAP scanner image (runs as root by design)
+│   ├── scan.sh                    # oscap scan, reports, retention of 7 runs
+│   ├── summarize.py               # result counts as JSON
+│   ├── harden-node.sh             # reviewed fixes for the node (manual run)
+│   └── ssg-debian12-ds.xml        # upstream SCAP datastream, unmodified
 ├── infra/
 │   ├── .env.example
 │   ├── docker-compose.yml
@@ -219,6 +319,8 @@ springboot-devops/
 │   │   ├── deployment.yaml.j2
 │   │   ├── namespace.yaml
 │   │   └── service.yaml
+│   ├── compliance/
+│   │   └── cronjob.yaml.j2        # nightly OpenSCAP CronJob (privileged, accepted risk)
 │   └── monitoring/
 │       ├── 00-namespace.yaml
 │       ├── grafana.yaml
@@ -277,7 +379,7 @@ Local-only files that are **not** committed: `infra/.env`, `.vault_pass`, `infra
 
 - Docker and Docker Compose
 - Minikube with the Docker driver, `kubectl`, and Git
-- A GitHub repository and Docker Hub repository/account
+- A GitHub repository and Docker Hub repository/account (the `springboot-devops` and `openscap-scanner` repositories must both be public)
 - Python 3 for local pre-commit hooks
 - Ansible with the `kubernetes.core` collection and Python `kubernetes` package for manual deploys (already included in the Jenkins image)
 - Approximately 10 GB RAM available for Minikube, Jenkins, SonarQube, and Nexus
@@ -429,6 +531,18 @@ ansible-playbook -i ansible/inventory.ini ansible/deploy.yml \
   -e image=YOUR_USER/springboot-devops -e tag=12
 ```
 
+### Running a compliance scan manually
+
+```bash
+kubectl get cronjob -n compliance
+kubectl create job oscap-manual --from=cronjob/openscap-node-scan -n compliance
+kubectl logs -n compliance job/oscap-manual --tail=20
+docker exec minikube cat /data/openscap/latest.json
+kubectl delete job oscap-manual -n compliance
+```
+
+To apply the reviewed node fixes, read `compliance/harden-node.sh` first, then run it on the Minikube node only (for example with `minikube ssh`). Re-run it after `minikube delete`.
+
 ## API
 
 | Method | Endpoint | Example request body |
@@ -468,7 +582,7 @@ cd infra && docker compose down
 minikube stop
 ```
 
-Use `docker compose down -v` only when intentionally deleting Jenkins, SonarQube, and Nexus data. Use `minikube delete` only when intentionally deleting the entire cluster.
+Use `docker compose down -v` only when intentionally deleting Jenkins, SonarQube, and Nexus data. Use `minikube delete` only when intentionally deleting the entire cluster (this also removes the OpenSCAP scan history and any node hardening).
 
 ## Troubleshooting
 
@@ -478,13 +592,19 @@ Use `docker compose down -v` only when intentionally deleting Jenkins, SonarQube
 | `network minikube not found` | Start Minikube before starting Docker Compose. |
 | Nexus returns `401` | Correct `NEXUS_PASSWORD` in `infra/.env`, then recreate Jenkins configuration. |
 | SonarQube or Semgrep stage fails | Review the Jenkins console output; address the finding or quality-gate condition before retrying. |
-| Trivy stage fails | Check the Trivy report, update the base image or dependency, or add a reviewed exception (with reason and review date) to `.trivyignore`. |
+| Trivy stage fails | Check the Trivy report, update the base image or dependency, or add a reviewed exception (with reason and review date) to `.trivyignore` (vulnerabilities) or `.trivyignore.yaml` (misconfigurations). |
+| `ignore file not found: .trivyignore.yaml` | The file is not committed and pushed. Jenkins only sees what is in the repository. |
 | Trivy fixed version not found on Maven Central | Trivy's database can list fixes that are not yet published. Check Maven Central for the version before overriding it in `pom.xml`. |
 | Trivy DB download fails or is slow | Confirm the persistent Trivy cache volume is present and Jenkins has network access to download the database. |
 | Trivy reports not found locally | Reports live in the Jenkins workspace. Use **Build → Artifacts** or `docker cp` (see Reports). |
+| Gitleaks blocks a commit on `compliance/ssg-debian12-ds.xml` | False positive on benchmark text. Check that `.gitleaks.toml` is in the repository root. Do not allowlist other files without reviewing the finding. |
 | `Decryption failed (no vault secrets were found...)` | The vault password does not match the one that encrypted `vault.yml`. Check `ansible-vault view` with `.vault_pass`; if it fails, recreate `vault.yml`. If it works, make sure `ANSIBLE_VAULT_PASS` in `infra/.env` is identical and recreate Jenkins (`docker compose up -d --force-recreate jenkins`). |
 | `vault_grafana_admin_password is undefined` | `vault.yml` is missing from the pushed repository or lives outside `ansible/group_vars/all/`. |
 | Grafana pod in `CreateContainerConfigError` | The `grafana-admin` Secret did not exist when Grafana was applied. Check the deploy order in `ansible/deploy.yml` (namespace, then Secret, then monitoring). |
 | Pipeline Report has no styling | Confirm the `DirectoryBrowserSupport.CSP` option is set in `infra/docker-compose.yml` and Jenkins was recreated. |
-| `ImagePullBackOff` | Ensure the Docker Hub repository is public and `DOCKERHUB_USER` is correct. |
+| `ImagePullBackOff` | Ensure the Docker Hub repositories (`springboot-devops` and `openscap-scanner`) are public and `DOCKERHUB_USER` is correct. |
+| Build is `UNSTABLE` after the OpenSCAP stage | The scan Job did not complete or the results could not be copied. Read the stage log (it prints the scan pod logs); check `kubectl get pods -n compliance` and `docker exec minikube ls /data/openscap`. |
+| `docker cp` cannot find `/data/openscap/latest.json` | Copy the results with `docker exec minikube cat <file> > <target>` instead; `/data` is not readable through `docker cp`. |
+| OpenSCAP report shows almost everything `notapplicable` | The scan did not see the node filesystem. Check that the Job mounts `/` at `/host` and that `OSCAP_PROBE_ROOT=/host` is set in `compliance/scan.sh`. |
+| Pipeline Report shows OpenSCAP "not run" | `reports/openscap.json` is missing: the scan stage failed or was skipped. |
 | SonarQube does not start on Linux | Run `sudo sysctl -w vm.max_map_count=524288`. |
