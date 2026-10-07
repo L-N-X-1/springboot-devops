@@ -1,6 +1,14 @@
 # Spring Boot DevSecOps Pipeline
 
-A Product, Category, and Customer REST API delivered through a local, end-to-end DevSecOps pipeline. A developer commit is checked before it leaves the workstation; Jenkins then builds, tests, scans, analyzes, publishes, packages, deploys, and monitors the application.
+A Product, Category, and Customer REST API delivered through a local, end-to-end DevSecOps pipeline. A developer commit is checked before it leaves the workstation; Jenkins then builds, tests, scans, analyzes, publishes, packages, deploys with encrypted secrets, monitors the application, and produces a report for every run.
+
+## What's new
+
+- **Ansible Vault** now protects deployment secrets. The Grafana admin password is encrypted in Git (`ansible/group_vars/all/vault.yml`), decrypted only at deploy time, and injected into Kubernetes as a `Secret` consumed through `secretKeyRef`. The hardcoded `admin/admin` is gone.
+- **Vault password handled as a Jenkins credential** (`ansible-vault-pass`), created by Configuration as Code from `infra/.env`. The temporary password file used during the deploy stage is deleted on exit.
+- **Per-run pipeline report**: `scripts/generate-report.py` builds a styled HTML summary (build info, vault check, Semgrep, SonarQube gate, Trivy counts, deployed pods) published as **Pipeline Report** on every build, even failed ones.
+- **Semgrep results retained** as `reports/semgrep.json`; the SonarQube gate status is captured for the report.
+- **Updated project tree and documentation**, including the DevSecOps phase breakdown below.
 
 ## Architecture
 
@@ -19,7 +27,8 @@ flowchart LR
         D --> TI[Trivy Image<br/>Container image scan]
         TI --> H[Docker Hub<br/>Push versioned & latest image]
         H --> TC[Trivy Config<br/>IaC/config scan]
-        TC --> A[Ansible<br/>Deploy application & monitoring]
+        TC --> A[Ansible + Ansible Vault<br/>Deploy application & monitoring]
+        A --> R[Pipeline report<br/>HTML summary]
       end
       SQ[SonarQube]
       NX[Nexus]
@@ -33,29 +42,74 @@ flowchart LR
         K -->|/actuator/prometheus| P --> GR
       end
       A --> K
+      A -->|K8s Secret| GR
       A --> P
-      A --> GR
     end
 ```
 
 The Jenkins container, SonarQube, Nexus, and Minikube run locally. Jenkins connects to the host Docker socket to build and push images, and uses the exported kubeconfig to deploy to Minikube.
+
+## DevSecOps implementation
+
+Security is applied in three phases, each with its own tooling.
+
+### Development phase
+
+This phase has two sections.
+
+**Pre-commit (before the commit exists): `pre-commit` hooks**
+
+[pre-commit](https://pre-commit.com) is a framework that runs checks automatically on staged files when `git commit` is executed, and blocks the commit if a check fails. It is the earliest security control in the project, because problems are caught on the developer's machine before they reach Git history or GitHub. Configured hooks cover YAML validity, trailing whitespace, oversized file additions, exposed private keys, secrets detection with Gitleaks, and sensitive filenames (custom script `scripts/check-sensitive-filenames.sh`).
+
+**Commit (CI): Semgrep**
+
+[Semgrep](https://semgrep.dev) is a static application security testing (SAST) tool. It reads the source code without running it and matches patterns for vulnerabilities such as injection flaws, insecure configurations, and unsafe API usage. It runs in Jenkins as `semgrep scan --config auto --error .`, so any finding stops the pipeline, and results are saved to `reports/semgrep.json`. It acts as the server-side safety net for the local hooks, which can be bypassed.
+
+### Acceptance phase
+
+**Trivy**
+
+[Trivy](https://trivy.dev) is an open-source scanner from Aqua Security. It is used in three modes:
+
+| Mode | Target | Finds | Behavior |
+|---|---|---|---|
+| `trivy fs` | Repository dependencies (`pom.xml`) | Known vulnerabilities in libraries (SCA) | Report |
+| `trivy image` | The built Docker image | HIGH and CRITICAL vulnerabilities in OS packages and the app | **Fails the build** before the image is pushed |
+| `trivy config` | Kubernetes manifests, Ansible, Dockerfile | Misconfigurations (IaC scanning) | Report only |
+
+HTML and JSON reports are archived for every build.
+
+### Production phase
+
+**Ansible Vault**
+
+[Ansible Vault](https://docs.ansible.com/ansible/latest/vault_guide/index.html) encrypts sensitive variables with AES256 so they can be stored safely in Git. Here it protects the secrets used at deploy time:
+
+- `ansible/group_vars/all/vault.yml` holds `vault_grafana_admin_password` and is committed only in encrypted form.
+- Jenkins injects the vault password from the `ansible-vault-pass` credential into a temporary file that is deleted when the stage ends.
+- The playbook creates a Kubernetes `Secret` (`grafana-admin`) with `no_log: true` so the value never appears in build logs.
+- The Grafana Deployment reads the password through `secretKeyRef`; no plain-text password exists in any manifest.
+
+**Known limits:** there is no automatic rotation or audit log, and Kubernetes Secrets are only base64-encoded unless etcd encryption is enabled. HashiCorp Vault or OpenBao is the production-grade upgrade path.
 
 ## DevSecOps phases and controls
 
 | Phase | Implementation | What it provides |
 |---|---|---|
 | Plan / develop | Git and GitHub | Versioned source code and a push-triggered delivery workflow. |
-| Commit security | `pre-commit` | Checks YAML, trailing whitespace, oversized additions, exposed private keys, Gitleaks secrets, and sensitive filenames before a commit is created. |
+| Pre-commit | `pre-commit` hooks | Checks YAML, trailing whitespace, oversized additions, exposed private keys, Gitleaks secrets, and sensitive filenames before a commit is created. |
 | Build and test | Maven + JUnit + JaCoCo | `mvn clean verify` compiles the Java 17 application, runs tests, and generates coverage data. |
-| Static application security testing (SAST) | Semgrep | `semgrep scan --config auto --error .` runs in Jenkins and stops the pipeline on findings. |
-| Software composition analysis (SCA) | Trivy FS | Scans repository dependencies, including `pom.xml`, for HIGH and CRITICAL vulnerabilities; HTML and JSON reports are retained in Jenkins. |
+| Commit (SAST) | Semgrep | `semgrep scan --config auto --error .` runs in Jenkins and stops the pipeline on findings. |
+| Acceptance (SCA) | Trivy FS | Scans repository dependencies, including `pom.xml`, for HIGH and CRITICAL vulnerabilities; HTML and JSON reports are retained in Jenkins. |
 | Code quality | SonarQube | Maven submits analysis and coverage; Jenkins waits for the configured quality gate and fails if it does not pass. |
 | Artifact management | Nexus Repository | Maven publishes the versioned JAR to the snapshots or releases repository. |
 | Containerize and release | Docker + Docker Hub | A multi-stage Dockerfile produces a non-root Java 17 runtime image. Jenkins pushes the build-number tag and `latest`. |
-| Container image security | Trivy Image | Scans the built image for HIGH and CRITICAL vulnerabilities before it can be pushed; HTML and JSON reports are retained in Jenkins. |
-| IaC/config security | Trivy Config | Reports HIGH and CRITICAL misconfigurations in the repository (Kubernetes manifests, Ansible, Dockerfile); HTML and JSON reports are retained in Jenkins. |
-| Deploy | Ansible + Kubernetes / Minikube | Ansible renders the image tag, applies the app manifests, deploys monitoring, and waits for the rollout. |
+| Acceptance (image) | Trivy Image | Scans the built image for HIGH and CRITICAL vulnerabilities before it can be pushed. |
+| Acceptance (IaC/config) | Trivy Config | Reports HIGH and CRITICAL misconfigurations in Kubernetes manifests, Ansible, and the Dockerfile. |
+| Production (secrets) | Ansible Vault | Encrypts deployment secrets in Git and delivers them to Kubernetes as `Secret` objects. |
+| Deploy | Ansible + Kubernetes / Minikube | Renders the image tag, applies app manifests, creates secrets, deploys monitoring, and waits for the rollout. |
 | Operate and monitor | Spring Boot Actuator + Prometheus + Grafana | Prometheus scrapes application metrics; Grafana provides the application dashboard. |
+| Reporting | `generate-report.py` | A styled HTML summary of every run, published in Jenkins. |
 
 ### Local commit checks
 
@@ -74,7 +128,7 @@ The hook configuration is in [`.pre-commit-config.yaml`](.pre-commit-config.yaml
 The pipeline is defined in [`Jenkinsfile`](Jenkinsfile) and runs in this order:
 
 1. Build, test, and collect coverage with Maven.
-2. Scan the repository with Semgrep.
+2. Scan the repository with Semgrep (JSON report retained).
 3. Run the Trivy filesystem dependency scan and retain HTML and JSON reports.
 4. Submit quality and coverage analysis to SonarQube; wait for its quality gate.
 5. Publish the Maven artifact to Nexus.
@@ -82,13 +136,26 @@ The pipeline is defined in [`Jenkinsfile`](Jenkinsfile) and runs in this order:
 7. Scan the image with Trivy; HIGH and CRITICAL findings stop the image from being pushed.
 8. Push `<dockerhub-user>/springboot-devops:<jenkins-build-number>` and `:latest` to Docker Hub.
 9. Run the report-only Trivy configuration scan (repository root, excluding `target/` and `infra/`).
-10. Run Ansible to deploy that exact image tag to Minikube, then apply Prometheus and Grafana.
+10. Run Ansible with the vault password to create the Grafana Secret and deploy that exact image tag to Minikube, then apply Prometheus and Grafana.
+11. Generate the **Pipeline Report** (runs on every build, including failures).
 
 Any failed stage stops the later stages, so an image is not built, published, or deployed after a failed test, Semgrep scan, Trivy image scan, or SonarQube gate.
 
-## Security reports
+## Reports
 
-Each Jenkins build retains Trivy HTML and JSON reports under **Build → Artifacts**. The Jenkins build page also provides **Trivy FS Scan**, **Trivy Image Scan**, and **Trivy Config Scan** links from the HTML Publisher plugin for viewing the HTML reports in the UI.
+Each Jenkins build retains these files under **Build → Artifacts**:
+
+| File | Content |
+|---|---|
+| `pipeline-report.html` | Run summary: build result, duration, image, commit, vault encryption check, Semgrep, SonarQube gate, Trivy counts, deployed pods |
+| `semgrep.json` | Semgrep findings |
+| `trivy-fs.html` / `.json` | Dependency vulnerabilities |
+| `trivy-image.html` / `.json` | Container image vulnerabilities |
+| `trivy-config.html` / `.json` | IaC and configuration misconfigurations |
+
+The build page also shows **Pipeline Report**, **Trivy FS Scan**, **Trivy Image Scan**, and **Trivy Config Scan** links from the HTML Publisher plugin.
+
+Jenkins blocks inline CSS in HTML reports by default. `infra/docker-compose.yml` relaxes the `hudson.model.DirectoryBrowserSupport.CSP` setting so the styled reports render correctly.
 
 Reports are generated in the Jenkins workspace, not in your local project folder. To copy them locally:
 
@@ -111,10 +178,10 @@ Trivy vulnerability exceptions live in [`.trivyignore`](.trivyignore). Every ent
 ├── Jenkinsfile              CI/CD and security pipeline
 ├── .pre-commit-config.yaml  Developer-side quality and secret checks
 ├── .trivyignore             Reviewed Trivy vulnerability exceptions
-├── scripts/                 Custom sensitive-file-name hook
+├── scripts/                 Sensitive-file-name hook and pipeline report generator
 ├── ci/                      Maven settings used for Nexus publishing
 ├── infra/                   Docker Compose, Jenkins image, JCasC, setup helpers
-├── ansible/                 Kubernetes deployment playbook
+├── ansible/                 Deployment playbook and Ansible Vault secrets
 └── k8s/                     Application and monitoring manifests
 ```
 
@@ -134,7 +201,10 @@ springboot-devops/
 ├── pom.xml
 ├── ansible/
 │   ├── deploy.yml
-│   └── inventory.ini
+│   ├── inventory.ini
+│   └── group_vars/
+│       └── all/
+│           └── vault.yml          # encrypted with Ansible Vault
 ├── ci/
 │   └── maven-settings.xml
 ├── infra/
@@ -154,7 +224,8 @@ springboot-devops/
 │       ├── grafana.yaml
 │       └── prometheus.yaml
 ├── scripts/
-│   └── check-sensitive-filenames.sh
+│   ├── check-sensitive-filenames.sh
+│   └── generate-report.py         # per-run HTML pipeline report
 ├── src/
 │   ├── main/
 │   │   ├── java/
@@ -200,12 +271,15 @@ springboot-devops/
 │                       └── ProductControllerTest.java
 ```
 
+Local-only files that are **not** committed: `infra/.env`, `.vault_pass`, `infra/jenkins/kubeconfig`, `reports/`, `target/`.
+
 ## Prerequisites
 
 - Docker and Docker Compose
 - Minikube with the Docker driver, `kubectl`, and Git
 - A GitHub repository and Docker Hub repository/account
 - Python 3 for local pre-commit hooks
+- Ansible with the `kubernetes.core` collection and Python `kubernetes` package for manual deploys (already included in the Jenkins image)
 - Approximately 10 GB RAM available for Minikube, Jenkins, SonarQube, and Nexus
 
 On Windows, use Git Bash or WSL for the shell commands.
@@ -241,16 +315,41 @@ minikube start --driver=docker --cpus=2 --memory=4096
 ./infra/export-kubeconfig.sh
 ```
 
-### 4. Configure local credentials
+### 4. Create the Ansible Vault
+
+Generate a vault password and encrypt the secrets file. `.vault_pass` must stay out of Git (it is in `.gitignore`).
+
+```bash
+openssl rand -base64 32 > .vault_pass
+mkdir -p ansible/group_vars/all
+ansible-vault create ansible/group_vars/all/vault.yml --vault-password-file .vault_pass
+```
+
+In the editor, add:
+
+```yaml
+vault_grafana_admin_password: "choose-a-strong-password"
+```
+
+Verify and commit the encrypted file:
+
+```bash
+ansible-vault view ansible/group_vars/all/vault.yml --vault-password-file .vault_pass
+git add ansible/group_vars/all/vault.yml
+```
+
+Edit it later with `ansible-vault edit ansible/group_vars/all/vault.yml --vault-password-file .vault_pass`. If `.vault_pass` is regenerated after encrypting, the file can no longer be decrypted and must be recreated.
+
+### 5. Configure local credentials
 
 ```bash
 cd infra
 cp .env.example .env
 ```
 
-Set `GIT_REPO_URL`, `DOCKERHUB_USER`, `DOCKERHUB_TOKEN`, `SONAR_TOKEN`, and `NEXUS_PASSWORD` in `infra/.env`. Do not commit this file.
+Set `GIT_REPO_URL`, `GITHUB_USER`, `GITHUB_TOKEN`, `DOCKERHUB_USER`, `DOCKERHUB_TOKEN`, `SONAR_TOKEN`, `NEXUS_PASSWORD`, and `ANSIBLE_VAULT_PASS` in `infra/.env`. `ANSIBLE_VAULT_PASS` must equal the content of `.vault_pass`, with no quotes or trailing spaces. Do not commit this file.
 
-### 5. Start SonarQube and Nexus
+### 6. Start SonarQube and Nexus
 
 ```bash
 docker compose up -d sonarqube nexus
@@ -263,13 +362,13 @@ Wait for both services to start. Then:
 
 Add the generated values to `infra/.env`.
 
-### 6. Start Jenkins and run the delivery pipeline
+### 7. Start Jenkins and run the delivery pipeline
 
 ```bash
 docker compose up -d --build jenkins
 ```
 
-Open <http://localhost:8080> and sign in using the Jenkins credentials in `infra/.env` (the example defaults are `admin` / `admin123`). The `springboot-devops` job and its credentials are created through Jenkins Configuration as Code. Run **Build Now** once; subsequent pushes are detected by a GitHub webhook when configured, or by polling approximately every two minutes.
+Open <http://localhost:8080> and sign in using the Jenkins credentials in `infra/.env` (the example defaults are `admin` / `admin123`; change them). The `springboot-devops` job and its credentials, including `ansible-vault-pass`, are created through Jenkins Configuration as Code. Run **Build Now** once; subsequent pushes are detected by a GitHub webhook when configured, or by polling approximately every two minutes.
 
 For immediate GitHub-triggered builds outside a publicly reachable network, expose Jenkins (for example, with `ngrok http 8080`) and add `https://<public-url>/github-webhook/` as a GitHub webhook.
 
@@ -288,6 +387,12 @@ To run the pre-commit suite without creating a commit:
 pre-commit run --all-files
 ```
 
+To generate the pipeline report locally from existing `reports/` files:
+
+```bash
+python3 scripts/generate-report.py   # writes reports/pipeline-report.html
+```
+
 ## Using the deployed stack
 
 ```bash
@@ -299,7 +404,13 @@ minikube service grafana -n monitoring --url
 - Jenkins: <http://localhost:8080>
 - SonarQube: <http://localhost:9000>
 - Nexus: <http://localhost:8081>
-- Grafana credentials: `admin` / `admin`
+- Grafana credentials: user `admin`, password = `vault_grafana_admin_password` from the vault (view it with `ansible-vault view`)
+
+Grafana reads its admin password only at first startup. After changing it, restart the pod:
+
+```bash
+kubectl rollout restart deploy/grafana -n monitoring
+```
 
 Useful checks:
 
@@ -314,6 +425,7 @@ To deploy an existing Docker Hub tag manually:
 
 ```bash
 ansible-playbook -i ansible/inventory.ini ansible/deploy.yml \
+  --vault-password-file .vault_pass \
   -e image=YOUR_USER/springboot-devops -e tag=12
 ```
 
@@ -369,6 +481,10 @@ Use `docker compose down -v` only when intentionally deleting Jenkins, SonarQube
 | Trivy stage fails | Check the Trivy report, update the base image or dependency, or add a reviewed exception (with reason and review date) to `.trivyignore`. |
 | Trivy fixed version not found on Maven Central | Trivy's database can list fixes that are not yet published. Check Maven Central for the version before overriding it in `pom.xml`. |
 | Trivy DB download fails or is slow | Confirm the persistent Trivy cache volume is present and Jenkins has network access to download the database. |
-| Trivy reports not found locally | Reports live in the Jenkins workspace. Use **Build → Artifacts** or `docker cp` (see Security reports). |
+| Trivy reports not found locally | Reports live in the Jenkins workspace. Use **Build → Artifacts** or `docker cp` (see Reports). |
+| `Decryption failed (no vault secrets were found...)` | The vault password does not match the one that encrypted `vault.yml`. Check `ansible-vault view` with `.vault_pass`; if it fails, recreate `vault.yml`. If it works, make sure `ANSIBLE_VAULT_PASS` in `infra/.env` is identical and recreate Jenkins (`docker compose up -d --force-recreate jenkins`). |
+| `vault_grafana_admin_password is undefined` | `vault.yml` is missing from the pushed repository or lives outside `ansible/group_vars/all/`. |
+| Grafana pod in `CreateContainerConfigError` | The `grafana-admin` Secret did not exist when Grafana was applied. Check the deploy order in `ansible/deploy.yml` (namespace, then Secret, then monitoring). |
+| Pipeline Report has no styling | Confirm the `DirectoryBrowserSupport.CSP` option is set in `infra/docker-compose.yml` and Jenkins was recreated. |
 | `ImagePullBackOff` | Ensure the Docker Hub repository is public and `DOCKERHUB_USER` is correct. |
 | SonarQube does not start on Linux | Run `sudo sysctl -w vm.max_map_count=524288`. |
