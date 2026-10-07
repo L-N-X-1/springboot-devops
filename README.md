@@ -281,96 +281,138 @@ Prefer fixing the dependency, image or configuration over ignoring a finding.
 
 ```text
 springboot-devops/
-├── .dockerignore
-├── .gitignore
-├── .gitleaks.toml
-├── .pre-commit-config.yaml
-├── .semgrepignore
-├── .trivyignore
-├── .trivyignore.yaml
-├── Dockerfile
-├── Jenkinsfile
-├── README.md
-├── functionality.md
-├── pom.xml
-├── ansible/
+.
+├── ansible
 │   ├── deploy.yml
-│   ├── inventory.ini
-│   └── group_vars/
-│       └── all/
-│           └── vault.yml          # encrypted with Ansible Vault
-├── ci/
+│   ├── group_vars
+│   │   └── all
+│   │       └── vault.yml
+│   └── inventory.ini
+├── ci
 │   └── maven-settings.xml
-├── compliance/
-│   ├── Dockerfile                 # OpenSCAP scanner image (runs as root by design)
-│   ├── scan.sh                    # oscap scan, reports, retention of 7 runs
-│   ├── summarize.py               # result counts as JSON
-│   ├── harden-node.sh             # reviewed fixes for the node (manual run)
-│   └── ssg-debian12-ds.xml        # upstream SCAP datastream, unmodified
-├── infra/
-│   ├── .env.example
+├── compliance
+│   ├── Dockerfile
+│   ├── harden-node.sh
+│   ├── scan.sh
+│   ├── ssg-debian12-ds.xml
+│   └── summarize.py
+├── Dockerfile
+├── functionality.md
+├── infra
 │   ├── docker-compose.yml
 │   ├── export-kubeconfig.sh
-│   └── jenkins/
+│   └── jenkins
+│       ├── casc.yaml
 │       ├── Dockerfile
-│       └── casc.yaml
-├── k8s/
-│   ├── app/
+│       └── kubeconfig
+├── Jenkinsfile
+├── k8s
+│   ├── app
 │   │   ├── deployment.yaml.j2
 │   │   ├── namespace.yaml
 │   │   └── service.yaml
-│   ├── compliance/
-│   │   └── cronjob.yaml.j2        # nightly OpenSCAP CronJob (privileged, accepted risk)
-│   └── monitoring/
+│   ├── compliance
+│   │   └── cronjob.yaml.j2
+│   └── monitoring
 │       ├── 00-namespace.yaml
 │       ├── grafana.yaml
 │       └── prometheus.yaml
-├── scripts/
+├── pom.xml
+├── README.md
+├── scripts
 │   ├── check-sensitive-filenames.sh
-│   └── generate-report.py         # per-run HTML pipeline report
-├── src/
-│   ├── main/
-│   │   ├── java/
-│   │   │   └── com/
-│   │   │       └── example/
-│   │   │           └── demo/
-│   │   │               ├── DemoApplication.java
-│   │   │               ├── HomeController.java
-│   │   │               ├── SampleDataInitializer.java
-│   │   │               ├── controller/
+│   └── generate-report.py
+├── src
+│   ├── main
+│   │   ├── java
+│   │   │   └── com
+│   │   │       └── example
+│   │   │           └── demo
+│   │   │               ├── controller
 │   │   │               │   ├── CategoryController.java
 │   │   │               │   ├── CustomerController.java
 │   │   │               │   └── ProductController.java
-│   │   │               ├── dto/
+│   │   │               ├── DemoApplication.java
+│   │   │               ├── dto
 │   │   │               │   ├── ProductRequest.java
 │   │   │               │   └── ProductResponse.java
-│   │   │               ├── entity/
+│   │   │               ├── entity
 │   │   │               │   ├── Category.java
 │   │   │               │   ├── Customer.java
 │   │   │               │   └── Product.java
-│   │   │               ├── exception/
+│   │   │               ├── exception
 │   │   │               │   ├── GlobalExceptionHandler.java
 │   │   │               │   └── ResourceNotFoundException.java
-│   │   │               ├── repository/
+│   │   │               ├── HomeController.java
+│   │   │               ├── repository
 │   │   │               │   ├── CategoryRepository.java
 │   │   │               │   ├── CustomerRepository.java
 │   │   │               │   └── ProductRepository.java
-│   │   │               └── service/
+│   │   │               ├── SampleDataInitializer.java
+│   │   │               └── service
 │   │   │                   ├── CategoryService.java
 │   │   │                   ├── CustomerService.java
-│   │   │                   ├── ProductService.java
-│   │   │                   └── impl/
-│   │   │                       ├── CategoryServiceImpl.java
-│   │   │                       ├── CustomerServiceImpl.java
-│   │   │                       └── ProductServiceImpl.java
-│   │   └── resources/
+│   │   │                   ├── impl
+│   │   │                   │   ├── CategoryServiceImpl.java
+│   │   │                   │   ├── CustomerServiceImpl.java
+│   │   │                   │   └── ProductServiceImpl.java
+│   │   │                   └── ProductService.java
+│   │   └── resources
 │   │       └── application.properties
-│   └── test/
-│       └── java/
-│           └── com/
-│               └── example/
-│                   └── demo/
+│   └── test
+│       └── java
+│           └── com
+│               └── example
+│                   └── demo
 │                       └── ProductControllerTest.java
+└── target
+    ├── classes
+    │   ├── application.properties
+    │   └── com
+    │       └── example
+    │           └── demo
+    │               ├── controller
+    │               │   ├── CategoryController.class
+    │               │   ├── CustomerController.class
+    │               │   └── ProductController.class
+    │               ├── DemoApplication.class
+    │               ├── dto
+    │               │   ├── ProductRequest.class
+    │               │   └── ProductResponse.class
+    │               ├── entity
+    │               │   ├── Category.class
+    │               │   ├── Customer.class
+    │               │   └── Product.class
+    │               ├── exception
+    │               │   ├── GlobalExceptionHandler.class
+    │               │   └── ResourceNotFoundException.class
+    │               ├── HomeController.class
+    │               ├── product
+    │               │   ├── Product.class
+    │               │   ├── ProductController.class
+    │               │   └── ProductRepository.class
+    │               ├── repository
+    │               │   ├── CategoryRepository.class
+    │               │   ├── CustomerRepository.class
+    │               │   └── ProductRepository.class
+    │               ├── SampleDataInitializer.class
+    │               └── service
+    │                   ├── CategoryService.class
+    │                   ├── CustomerService.class
+    │                   ├── impl
+    │                   │   ├── CategoryServiceImpl.class
+    │                   │   ├── CustomerServiceImpl.class
+    │                   │   └── ProductServiceImpl.class
+    │                   └── ProductService.class
+    ├── generated-sources
+    │   └── annotations
+    └── maven-status
+        └── maven-compiler-plugin
+            └── compile
+                └── default-compile
+                    ├── createdFiles.lst
+                    └── inputFiles.lst
+
 ```
 
 Local-only files that are **not** committed: `infra/.env`, `.vault_pass`, `infra/jenkins/kubeconfig`, `reports/`, `target/`.
